@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 # music.sh — Control Nanoleaf lightstrip colors based on currently playing Apple Music
-# Usage: ./music.sh [--work|--club]
+# Supports real-time audio reactive mode (default) and BPM-based rotation mode.
+#
+# Usage:
+#   ./music.sh              # default: audio-reactive colors
+#   ./music.sh --work       # soft warm white, static, no animation
+#   ./music.sh --club       # high saturation, aggressive audio reaction
+#   ./music.sh --bpm        # BPM-based rotation (no audio capture needed)
+#   ./music.sh --bpm --club # BPM rotation + club colors
 
 set -euo pipefail
 
@@ -8,31 +15,73 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 NANOLEAF="$SCRIPT_DIR/nanoleaf.py"
 NUM_ZONES=9
 
-# --- Mode ---
-MODE="auto"  # auto, work, club
-case "${1:-}" in
-    --work) MODE="work" ;;
-    --club) MODE="club" ;;
-    --help|-h)
-        echo "Usage: $(basename "$0") [--work|--club]"
-        echo "  (default)  Auto color palette from music genre + track hash, rotate per BPM"
-        echo "  --work     Soft warm white, low saturation, no animation"
-        echo "  --club     High saturation, fast BPM-synced rotation"
-        exit 0 ;;
-esac
+# --- Parse args ---
+MODE="auto"       # auto, work, club
+SYNC="audio"      # audio, bpm
+for arg in "$@"; do
+    case "$arg" in
+        --work) MODE="work" ;;
+        --club) MODE="club" ;;
+        --bpm)  SYNC="bpm" ;;
+        --help|-h)
+            cat <<'USAGE'
+Usage: music.sh [OPTIONS]
+
+Options:
+  (default)    Audio-reactive: colors pulse and shift with the music volume
+  --work       Soft warm white, low saturation, no animation
+  --club       High saturation, aggressive audio reaction
+  --bpm        Use BPM-based rotation instead of audio (no sox needed)
+
+Modes can be combined:
+  --club --bpm   Club colors with BPM rotation
+
+Audio setup:
+  Default uses microphone to pick up speaker output.
+  For best results, install BlackHole for direct system audio capture:
+    brew install --cask blackhole-2ch
+  Then create a Multi-Output Device in Audio MIDI Setup that includes
+  both your speakers and BlackHole 2ch.
+USAGE
+            exit 0 ;;
+    esac
+done
+
+# --- Check sox for audio mode ---
+if [[ "$SYNC" == "audio" ]]; then
+    if ! command -v rec &>/dev/null; then
+        echo "[warn] sox not found — falling back to BPM mode"
+        echo "  Install with: brew install sox"
+        SYNC="bpm"
+    fi
+fi
+
+# --- Detect audio input device for sox ---
+AUDIO_DEVICE=""
+if [[ "$SYNC" == "audio" ]]; then
+    # Prefer BlackHole if available (direct system audio capture)
+    if rec -q -n -d "BlackHole 2ch" trim 0 0.01 stat 2>&1 | grep -q "Samples read"; then
+        AUDIO_DEVICE="BlackHole 2ch"
+        echo "[audio] Using BlackHole (direct system audio)"
+    else
+        # Fall back to default input (microphone)
+        AUDIO_DEVICE=""
+        echo "[audio] Using microphone (play through speakers for best results)"
+    fi
+fi
 
 # --- Cleanup on exit: set warm white ---
 cleanup() {
     echo ""
     echo "Exiting — setting warm white..."
-    "$NANOLEAF" color 255 180 100 2>/dev/null || true
+    "$NANOLEAF" color 255 180 100 >/dev/null 2>&1 || true
     exit 0
 }
 trap cleanup INT TERM
 
 # --- Helper: call nanoleaf.py, warn on failure ---
 nl() {
-    if ! "$NANOLEAF" "$@" 2>/dev/null; then
+    if ! "$NANOLEAF" "$@" >/dev/null 2>&1; then
         echo "  [warn] nanoleaf.py $* failed"
     fi
 }
@@ -41,7 +90,6 @@ nl() {
 # H: 0-359, S: 0-100, V: 0-100 -> echoes "R,G,B"
 hsv2rgb() {
     local h=$1 s=$2 v=$3
-    # Scale to 0-255
     local vs=$(( v * 255 / 100 ))
     if (( s == 0 )); then
         echo "$vs,$vs,$vs"
@@ -62,38 +110,22 @@ hsv2rgb() {
     esac
 }
 
-# --- Clamp value to 0-255 ---
-clamp() {
-    local v=$1
-    (( v < 0 )) && v=0
-    (( v > 255 )) && v=255
-    echo "$v"
-}
-
-# --- Linear interpolation for integers ---
-lerp() {
-    local a=$1 b=$2 t_num=$3 t_den=$4
-    echo $(( a + (b - a) * t_num / t_den ))
-}
-
 # --- Generate 9-zone palette from 3 anchor hues ---
-# Args: h1 s1 v1  h2 s2 v2  h3 s3 v3
 generate_palette() {
     local h1=$1 s1=$2 v1=$3 h2=$4 s2=$5 v2=$6 h3=$7 s3=$8 v3=$9
     local zones=()
     for i in $(seq 0 8); do
-        local segment t_num t_den ah as av bh bs bv
+        local ah as av bh bs bv t_num t_den
         if (( i < 4 )); then
-            segment=0; t_num=$i; t_den=4
+            t_num=$i; t_den=4
             ah=$h1; as=$s1; av=$v1; bh=$h2; bs=$s2; bv=$v2
         else
-            segment=1; t_num=$(( i - 4 )); t_den=4
+            t_num=$(( i - 4 )); t_den=4
             ah=$h2; as=$s2; av=$v2; bh=$h3; bs=$s3; bv=$v3
         fi
         local ih=$(( ah + (bh - ah) * t_num / t_den ))
         local is=$(( as + (bs - as) * t_num / t_den ))
         local iv=$(( av + (bv - av) * t_num / t_den ))
-        # Wrap hue
         (( ih < 0 )) && ih=$(( ih + 360 ))
         (( ih >= 360 )) && ih=$(( ih % 360 ))
         zones+=("$(hsv2rgb $ih $is $iv)")
@@ -115,38 +147,55 @@ rotate_palette() {
     echo "${result[*]}"
 }
 
+# --- Scale palette brightness: multiply each RGB channel by factor (0-100)/100 ---
+scale_palette() {
+    local -a colors=($1)
+    local factor=$2  # 0-100
+    local result=()
+    for c in "${colors[@]}"; do
+        IFS=',' read -r r g b <<< "$c"
+        r=$(( r * factor / 100 ))
+        g=$(( g * factor / 100 ))
+        b=$(( b * factor / 100 ))
+        (( r > 255 )) && r=255; (( r < 0 )) && r=0
+        (( g > 255 )) && g=255; (( g < 0 )) && g=0
+        (( b > 255 )) && b=255; (( b < 0 )) && b=0
+        result+=("$r,$g,$b")
+    done
+    echo "${result[*]}"
+}
+
 # --- Genre -> base hue + saturation ---
 genre_to_hsv() {
-    local genre="${1,,}"  # lowercase
+    local genre
+    genre=$(echo "$1" | tr '[:upper:]' '[:lower:]')
     case "$genre" in
-        *rock*|*metal*|*punk*)       echo "10 85 90" ;;   # red-orange
-        *jazz*|*soul*)               echo "260 70 80" ;;  # blue-purple
+        *rock*|*metal*|*punk*)       echo "10 85 90" ;;
+        *jazz*|*soul*)               echo "260 70 80" ;;
         *electro*|*edm*|*techno*|*house*|*dance*)
-                                     echo "290 80 90" ;;  # purple-pink
-        *pop*)                       echo "330 65 90" ;;  # pink-red
-        *classical*|*orchestra*)     echo "40 60 85" ;;   # gold-amber
+                                     echo "290 80 90" ;;
+        *pop*)                       echo "330 65 90" ;;
+        *classical*|*orchestra*)     echo "40 60 85" ;;
         *ambient*|*chill*|*lofi*|*lo-fi*)
-                                     echo "190 50 70" ;;  # cyan-blue
-        *hip*hop*|*rap*|*trap*)      echo "270 75 85" ;;  # purple
-        *rnb*|*"r&b"*|*R\&B*)       echo "300 60 80" ;;  # magenta
-        *country*|*folk*|*bluegrass*)echo "30 70 80" ;;   # warm orange
-        *blues*)                     echo "220 65 75" ;;  # deep blue
-        *reggae*|*ska*)              echo "120 70 80" ;;  # green
-        *latin*|*salsa*|*bossa*)     echo "20 80 90" ;;   # warm red-orange
-        *indie*|*alternative*)       echo "170 55 80" ;;  # teal
-        *soundtrack*|*cinematic*)    echo "50 45 85" ;;   # warm gold
-        *)                           echo "" ;;           # unknown -> hash only
+                                     echo "190 50 70" ;;
+        *hip*hop*|*rap*|*trap*)      echo "270 75 85" ;;
+        *rnb*|*"r&b"*|*R\&B*)       echo "300 60 80" ;;
+        *country*|*folk*|*bluegrass*)echo "30 70 80" ;;
+        *blues*)                     echo "220 65 75" ;;
+        *reggae*|*ska*)              echo "120 70 80" ;;
+        *latin*|*salsa*|*bossa*)     echo "20 80 90" ;;
+        *indie*|*alternative*)       echo "170 55 80" ;;
+        *soundtrack*|*cinematic*)    echo "50 45 85" ;;
+        *)                           echo "" ;;
     esac
 }
 
 # --- Get Apple Music info via osascript ---
 get_music_info() {
-    # Check if Music.app is running first (avoid launching it)
     if ! pgrep -xq "Music"; then
         echo "|||stopped"
         return
     fi
-
     local info
     info=$(osascript -e '
         tell application "Music"
@@ -170,18 +219,41 @@ get_music_info() {
     echo "$info"
 }
 
+# --- Get audio level from microphone/BlackHole (0-100) ---
+# Captures a short audio sample and returns RMS amplitude scaled to 0-100
+get_audio_level() {
+    local stats rms
+    if [[ -n "$AUDIO_DEVICE" ]]; then
+        stats=$(rec -q -d "$AUDIO_DEVICE" -n trim 0 0.08 stat 2>&1) || true
+    else
+        stats=$(rec -q -n trim 0 0.08 stat 2>&1) || true
+    fi
+    rms=$(echo "$stats" | awk '/RMS.*amplitude/ {print $3; exit}')
+    if [[ -z "$rms" || "$rms" == "0.000000" ]]; then
+        echo "0"
+        return
+    fi
+    # Scale: RMS is typically 0.0-0.3 for normal audio
+    # Amplify and cap at 100
+    echo "$rms" | awk '{v = int($1 * 400); if (v > 100) v = 100; print v}'
+}
+
 # --- Main loop ---
 echo "=== Nanoleaf Music Sync ==="
-echo "Mode: $MODE"
+echo "Mode: $MODE | Sync: $SYNC"
 echo "Press Ctrl+C to exit (restores warm white)"
 echo ""
 
 LAST_TRACK=""
 ROTATION=0
 PALETTE=""
+# Beat detection state (for audio mode)
+AVG_LEVEL=0        # running average (scaled x100 for integer math)
+BEAT_THRESHOLD=25   # minimum level to count as a beat
+FRAMES_SINCE_BEAT=0
 
 while true; do
-    # Get current track info
+    # --- Get current track info (poll every iteration in audio mode, less often otherwise) ---
     INFO=$(get_music_info)
     IFS='|' read -r TRACK ARTIST GENRE BPM <<< "$INFO"
 
@@ -200,21 +272,21 @@ while true; do
     if [[ "$TRACK" != "$LAST_TRACK" ]]; then
         LAST_TRACK="$TRACK"
         ROTATION=0
+        AVG_LEVEL=0
+        FRAMES_SINCE_BEAT=0
         echo "[now playing] $TRACK — $ARTIST ${GENRE:+(${GENRE})} ${BPM:+[${BPM} BPM]}"
 
         # Hash the track name for color variation
         HASH=$(md5 -qs "$TRACK" 2>/dev/null || echo "$TRACK" | md5sum | cut -d' ' -f1)
         HASH_INT=$(( 16#${HASH:0:6} ))
         HUE_OFFSET=$(( HASH_INT % 60 ))
-        SAT_OFFSET=$(( (HASH_INT / 60) % 20 - 10 ))  # -10 to +10
+        SAT_OFFSET=$(( (HASH_INT / 60) % 20 - 10 ))
 
         # Get base HSV from genre
         BASE_HSV=$(genre_to_hsv "$GENRE")
-
         if [[ -n "$BASE_HSV" ]]; then
             read -r BASE_H BASE_S BASE_V <<< "$BASE_HSV"
         else
-            # No genre: use hash for base hue
             BASE_H=$(( HASH_INT % 360 ))
             BASE_S=70
             BASE_V=85
@@ -222,23 +294,17 @@ while true; do
 
         # Mode adjustments
         case "$MODE" in
-            work)
-                BASE_S=20
-                BASE_V=80
-                ;;
-            club)
-                BASE_S=$(( BASE_S > 90 ? 95 : BASE_S + 10 ))
-                BASE_V=95
-                ;;
+            work) BASE_S=20; BASE_V=80 ;;
+            club) BASE_S=$(( BASE_S + 10 )); (( BASE_S > 100 )) && BASE_S=100; BASE_V=95 ;;
         esac
 
-        # Generate 3 anchor points with spread
+        # Generate 3 anchor points
         H1=$(( (BASE_H + HUE_OFFSET) % 360 ))
         S1=$(( BASE_S + SAT_OFFSET ))
         (( S1 < 0 )) && S1=0; (( S1 > 100 )) && S1=100
         V1=$BASE_V
 
-        SPREAD1=$(( 40 + HASH_INT % 40 ))  # 40-80 degree spread
+        SPREAD1=$(( 40 + HASH_INT % 40 ))
         SPREAD2=$(( 40 + (HASH_INT / 100) % 40 ))
 
         H2=$(( (H1 + SPREAD1) % 360 ))
@@ -248,48 +314,89 @@ while true; do
         (( V2 < 30 )) && V2=30; (( V2 > 100 )) && V2=100
 
         H3=$(( (H2 + SPREAD2) % 360 ))
-        S3=$S1
-        V3=$V1
+        S3=$S1; V3=$V1
 
         if [[ "$MODE" == "club" ]]; then
-            # Club: higher contrast between anchors
-            S2=$(( S2 > 60 ? 95 : S2 + 30 ))
-            (( S2 > 100 )) && S2=100
-            H3=$(( (H1 + 180 + HUE_OFFSET) % 360 ))  # complementary
+            S2=$(( S2 + 30 )); (( S2 > 100 )) && S2=100
+            H3=$(( (H1 + 180 + HUE_OFFSET) % 360 ))
         fi
 
         PALETTE=$(generate_palette $H1 $S1 $V1 $H2 $S2 $V2 $H3 $S3 $V3)
         echo "  palette: $PALETTE"
     fi
 
-    # --- Apply palette (with rotation for animation) ---
-    if [[ "$MODE" == "work" ]]; then
-        # Work mode: static, no rotation
-        nl zones $PALETTE
-    else
+    # =====================
+    # AUDIO-REACTIVE MODE
+    # =====================
+    if [[ "$SYNC" == "audio" && "$MODE" != "work" ]]; then
+        LEVEL=$(get_audio_level)
+
+        # Update running average (exponential moving average, integer math x100)
+        # avg = avg * 0.85 + level * 0.15
+        AVG_LEVEL=$(( AVG_LEVEL * 85 / 100 + LEVEL * 15 ))
+
+        # Beat detection: level significantly above average
+        IS_BEAT=0
+        if (( LEVEL > BEAT_THRESHOLD && LEVEL * 100 > AVG_LEVEL * 150 && FRAMES_SINCE_BEAT > 2 )); then
+            IS_BEAT=1
+            FRAMES_SINCE_BEAT=0
+        else
+            FRAMES_SINCE_BEAT=$(( FRAMES_SINCE_BEAT + 1 ))
+        fi
+
+        # --- Apply colors based on audio level ---
+        if [[ "$MODE" == "club" ]]; then
+            # Club: on beat -> rotate palette, brightness pulses with volume
+            if (( IS_BEAT )); then
+                ROTATION=$(( (ROTATION + 1 + LEVEL / 30) % NUM_ZONES ))
+            fi
+            # Brightness: 40% base + 60% from volume
+            BRIGHT=$(( 40 + LEVEL * 60 / 100 ))
+        else
+            # Auto: gentler reaction, rotate on strong beats only
+            if (( IS_BEAT && LEVEL > 40 )); then
+                ROTATION=$(( (ROTATION + 1) % NUM_ZONES ))
+            fi
+            # Brightness: 50% base + 50% from volume
+            BRIGHT=$(( 50 + LEVEL * 50 / 100 ))
+        fi
+
+        ROTATED=$(rotate_palette "$PALETTE" $ROTATION)
+        SCALED=$(scale_palette "$ROTATED" $BRIGHT)
+        nl zones $SCALED
+
+        # Audio loop runs fast (~80ms sample + send time)
+        # No extra sleep needed — rec already takes ~80ms
+
+    # =====================
+    # BPM MODE
+    # =====================
+    elif [[ "$SYNC" == "bpm" && "$MODE" != "work" ]]; then
         ROTATED=$(rotate_palette "$PALETTE" $ROTATION)
         nl zones $ROTATED
-
         ROTATION=$(( (ROTATION + 1) % NUM_ZONES ))
-    fi
 
-    # --- Sleep interval based on BPM ---
-    if [[ "$MODE" == "work" ]]; then
-        # Work: slow poll, no animation needed
-        sleep 10
-    elif [[ -n "$BPM" && "$BPM" -gt 0 ]] 2>/dev/null; then
-        # Calculate beat interval: 60 / BPM
-        # Use integer math: sleep in tenths of a second via python or bc
-        if [[ "$MODE" == "club" ]]; then
-            # Club: every beat
-            INTERVAL=$(echo "scale=2; 60 / $BPM" | bc 2>/dev/null || echo "0.5")
+        # Sleep based on BPM
+        if [[ -n "$BPM" && "$BPM" -gt 0 ]] 2>/dev/null; then
+            if [[ "$MODE" == "club" ]]; then
+                INTERVAL=$(echo "scale=2; 60 / $BPM" | bc 2>/dev/null || echo "0.5")
+            else
+                INTERVAL=$(echo "scale=2; 120 / $BPM" | bc 2>/dev/null || echo "3")
+            fi
+            sleep "$INTERVAL"
         else
-            # Auto: every 2 beats
-            INTERVAL=$(echo "scale=2; 120 / $BPM" | bc 2>/dev/null || echo "3")
+            if [[ "$MODE" == "club" ]]; then
+                sleep 0.5
+            else
+                sleep 3
+            fi
         fi
-        sleep "$INTERVAL"
+
+    # =====================
+    # WORK MODE (static)
+    # =====================
     else
-        # No BPM: default 3 seconds
-        sleep 3
+        nl zones $PALETTE
+        sleep 10
     fi
 done

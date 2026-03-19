@@ -37,6 +37,7 @@
 | 文件 | 说明 |
 |------|------|
 | `nanoleaf.py` | 控制脚本，包含所有命令的实现 |
+| `music.sh` | 音乐灯光同步脚本，根据 Apple Music 播放状态动态控制灯带颜色 |
 | `nanoleaf-setup-guide.md` | 安装配置指南，从环境搭建到使用的完整步骤 |
 
 ## 快速示例
@@ -49,11 +50,51 @@ nanoleaf gradient blue purple  # 蓝紫渐变
 nanoleaf off             # 关灯
 ```
 
+## 音乐灯光同步（music.sh）
+
+`music.sh` 可以读取 Apple Music 当前播放的音乐，根据流派和曲名生成灯带颜色，并通过实时音频分析让灯光随音乐节奏变化。
+
+### 使用方式
+
+```bash
+./music.sh              # 默认：音频响应模式，灯光随音量和节拍脉动
+./music.sh --work       # 工作模式：柔和暖白光，低饱和度，无动画
+./music.sh --club       # 夜店模式：高饱和度，音量驱动亮度脉冲，节拍触发色彩旋转
+./music.sh --bpm        # BPM 模式：按歌曲 BPM 定时旋转（不需要 sox）
+./music.sh --club --bpm # 夜店配色 + BPM 旋转
+```
+
+### 工作原理
+
+1. **音乐检测**：通过 osascript 查询 Apple Music 的当前曲目、艺术家、流派
+2. **颜色映射**：根据流派选择基础色调（如 rock→红橙、jazz→蓝紫、electronic→紫粉），再用曲名哈希产生同流派不同歌曲之间的色彩变化
+3. **渐变生成**：从 3 个锚点色在 9 个 zone 间线性插值，生成平滑渐变
+4. **音频响应**（默认）：通过 `sox` 实时采样音频，检测音量和节拍，驱动灯光亮度和色板旋转
+5. **BPM 旋转**（`--bpm`）：读取歌曲 BPM 元数据，按固定节拍间隔旋转色板
+
+### 音频设置
+
+默认通过麦克风拾取扬声器输出的声音。如需更精确的系统音频捕获，可安装 BlackHole：
+
+```bash
+brew install --cask blackhole-2ch
+```
+
+然后在「音频 MIDI 设置」中创建多输出设备，同时包含扬声器和 BlackHole 2ch。脚本会自动检测并优先使用 BlackHole。
+
+### 状态行为
+
+- **播放中**：灯带显示音乐对应的渐变色，随音频实时变化
+- **暂停/无音乐**：灯带自动切换为暗暖光
+- **Ctrl+C 退出**：灯带恢复为暖白光
+
 ## 系统要求
 
 - macOS
 - Python 3（推荐通过 Homebrew 安装）
 - Python `hid` 库
 - Nanoleaf PC Screen Mirror Lightstrip（NL82K2），通过 USB-C 连接
+- `sox`（音频响应模式需要，`brew install sox`）
+- BlackHole（可选，用于直接捕获系统音频，`brew install --cask blackhole-2ch`）
 
 详细安装步骤请参考 [nanoleaf-setup-guide.md](nanoleaf-setup-guide.md)。
