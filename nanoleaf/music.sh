@@ -223,10 +223,13 @@ get_music_info() {
 # Captures a short audio sample and returns RMS amplitude scaled to 0-100
 get_audio_level() {
     local stats rms
+    local sample_len=0.08
+    # Club mode: shorter sample for faster response
+    [[ "$MODE" == "club" ]] && sample_len=0.05
     if [[ -n "$AUDIO_DEVICE" ]]; then
-        stats=$(rec -q -d "$AUDIO_DEVICE" -n trim 0 0.08 stat 2>&1) || true
+        stats=$(rec -q -d "$AUDIO_DEVICE" -n trim 0 "$sample_len" stat 2>&1) || true
     else
-        stats=$(rec -q -n trim 0 0.08 stat 2>&1) || true
+        stats=$(rec -q -n trim 0 "$sample_len" stat 2>&1) || true
     fi
     rms=$(echo "$stats" | awk '/RMS.*amplitude/ {print $3; exit}')
     if [[ -z "$rms" || "$rms" == "0.000000" ]]; then
@@ -249,13 +252,25 @@ ROTATION=0
 PALETTE=""
 # Beat detection state (for audio mode)
 AVG_LEVEL=0        # running average (scaled x100 for integer math)
-BEAT_THRESHOLD=25   # minimum level to count as a beat
+BEAT_THRESHOLD=15   # minimum level to count as a beat
 FRAMES_SINCE_BEAT=0
+FRAME_COUNT=0       # track frame count for periodic music info poll
 
 while true; do
-    # --- Get current track info (poll every iteration in audio mode, less often otherwise) ---
-    INFO=$(get_music_info)
-    IFS='|' read -r TRACK ARTIST GENRE BPM <<< "$INFO"
+    # --- Get current track info (poll less often in audio mode to reduce latency) ---
+    if [[ "$SYNC" == "audio" && "$MODE" != "work" && -n "$LAST_TRACK" && "$LAST_TRACK" != "__idle__" ]]; then
+        # In audio mode, only poll music info every ~30 frames (~2.5s)
+        FRAME_COUNT=$(( FRAME_COUNT + 1 ))
+        if (( FRAME_COUNT >= 30 )); then
+            FRAME_COUNT=0
+            INFO=$(get_music_info)
+            IFS='|' read -r TRACK ARTIST GENRE BPM <<< "$INFO"
+        fi
+    else
+        INFO=$(get_music_info)
+        IFS='|' read -r TRACK ARTIST GENRE BPM <<< "$INFO"
+        FRAME_COUNT=0
+    fi
 
     # --- No music playing ---
     if [[ -z "$TRACK" || "$BPM" == "stopped" ]]; then
@@ -337,21 +352,36 @@ while true; do
 
         # Beat detection: level significantly above average
         IS_BEAT=0
-        if (( LEVEL > BEAT_THRESHOLD && LEVEL * 100 > AVG_LEVEL * 150 && FRAMES_SINCE_BEAT > 2 )); then
-            IS_BEAT=1
-            FRAMES_SINCE_BEAT=0
+        if [[ "$MODE" == "club" ]]; then
+            # Club: lower threshold, faster reset — detect more beats
+            if (( LEVEL > BEAT_THRESHOLD && LEVEL * 100 > AVG_LEVEL * 120 && FRAMES_SINCE_BEAT > 1 )); then
+                IS_BEAT=1
+                FRAMES_SINCE_BEAT=0
+            else
+                FRAMES_SINCE_BEAT=$(( FRAMES_SINCE_BEAT + 1 ))
+            fi
         else
-            FRAMES_SINCE_BEAT=$(( FRAMES_SINCE_BEAT + 1 ))
+            if (( LEVEL > BEAT_THRESHOLD && LEVEL * 100 > AVG_LEVEL * 150 && FRAMES_SINCE_BEAT > 2 )); then
+                IS_BEAT=1
+                FRAMES_SINCE_BEAT=0
+            else
+                FRAMES_SINCE_BEAT=$(( FRAMES_SINCE_BEAT + 1 ))
+            fi
         fi
 
         # --- Apply colors based on audio level ---
         if [[ "$MODE" == "club" ]]; then
-            # Club: on beat -> rotate palette, brightness pulses with volume
-            if (( IS_BEAT )); then
-                ROTATION=$(( (ROTATION + 1 + LEVEL / 30) % NUM_ZONES ))
+            # Club: rotate EVERY frame based on volume, extra jump on beats
+            # Continuous rotation: always move, faster when louder
+            if (( LEVEL > 10 )); then
+                ROTATION=$(( (ROTATION + 1) % NUM_ZONES ))
             fi
-            # Brightness: 40% base + 60% from volume
-            BRIGHT=$(( 40 + LEVEL * 60 / 100 ))
+            # On beat: extra jump for dramatic shift
+            if (( IS_BEAT )); then
+                ROTATION=$(( (ROTATION + 2 + LEVEL / 25) % NUM_ZONES ))
+            fi
+            # Brightness: 30% base + 70% from volume — more dramatic swings
+            BRIGHT=$(( 30 + LEVEL * 70 / 100 ))
         else
             # Auto: gentler reaction, rotate on strong beats only
             if (( IS_BEAT && LEVEL > 40 )); then
