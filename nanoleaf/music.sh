@@ -128,7 +128,7 @@ genre_to_hsv() {
         *ambient*|*chill*|*lofi*|*lo-fi*)
                                      echo "190 50 70" ;;  # cyan-blue
         *hip*hop*|*rap*|*trap*)      echo "270 75 85" ;;  # purple
-        *r&b*|*rnb*|*r\&b*)         echo "300 60 80" ;;  # magenta
+        *rnb*|*"r&b"*|*R\&B*)       echo "300 60 80" ;;  # magenta
         *country*|*folk*|*bluegrass*)echo "30 70 80" ;;   # warm orange
         *blues*)                     echo "220 65 75" ;;  # deep blue
         *reggae*|*ska*)              echo "120 70 80" ;;  # green
