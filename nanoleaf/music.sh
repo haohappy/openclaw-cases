@@ -56,17 +56,25 @@ if [[ "$SYNC" == "audio" ]]; then
     fi
 fi
 
-# --- Detect audio input device for sox ---
-AUDIO_DEVICE=""
+# --- Detect audio input device ---
+AUDIO_INDEX=""
 if [[ "$SYNC" == "audio" ]]; then
-    # Prefer BlackHole if available (direct system audio capture)
-    if rec -q -n -d "BlackHole 2ch" trim 0 0.01 stat 2>&1 | grep -q "Samples read"; then
-        AUDIO_DEVICE="BlackHole 2ch"
-        echo "[audio] Using BlackHole (direct system audio)"
+    if ! command -v ffmpeg &>/dev/null; then
+        echo "[warn] ffmpeg not found — falling back to BPM mode"
+        echo "  Install with: brew install ffmpeg"
+        SYNC="bpm"
     else
-        # Fall back to default input (microphone)
-        AUDIO_DEVICE=""
-        echo "[audio] Using microphone (play through speakers for best results)"
+        # Find BlackHole device index via ffmpeg
+        BH_INDEX=$(ffmpeg -f avfoundation -list_devices true -i "" 2>&1 \
+            | grep -i "BlackHole" | head -1 | sed 's/.*\[\([0-9]*\)\].*/\1/' || true)
+        if [[ -n "$BH_INDEX" ]]; then
+            AUDIO_INDEX="$BH_INDEX"
+            echo "[audio] Using BlackHole (device index $BH_INDEX)"
+        else
+            # Fall back to default input device (index 0)
+            AUDIO_INDEX="0"
+            echo "[audio] BlackHole not found, using default input device"
+        fi
     fi
 fi
 
@@ -219,25 +227,21 @@ get_music_info() {
     echo "$info"
 }
 
-# --- Get audio level from microphone/BlackHole (0-100) ---
-# Captures a short audio sample and returns RMS amplitude scaled to 0-100
+# --- Get audio level via ffmpeg (0-100) ---
+# Captures a short audio sample, pipes to sox for RMS analysis
 get_audio_level() {
-    local stats rms
     local sample_len=0.08
-    # Club mode: shorter sample for faster response
     [[ "$MODE" == "club" ]] && sample_len=0.05
-    if [[ -n "$AUDIO_DEVICE" ]]; then
-        stats=$(rec -q -d "$AUDIO_DEVICE" -n trim 0 "$sample_len" stat 2>&1) || true
-    else
-        stats=$(rec -q -n trim 0 "$sample_len" stat 2>&1) || true
-    fi
-    rms=$(echo "$stats" | awk '/RMS.*amplitude/ {print $3; exit}')
+    local rms
+    # ffmpeg captures from avfoundation audio device, outputs raw PCM to sox for analysis
+    # Subshell to avoid pipefail killing the script
+    rms=$(set +o pipefail; ffmpeg -f avfoundation -i ":${AUDIO_INDEX}" -t "$sample_len" -f wav -ac 1 -ar 16000 pipe:1 2>/dev/null \
+        | sox -t wav - -n stat 2>&1 \
+        | awk '/RMS.*amplitude/ {print $3; exit}')
     if [[ -z "$rms" || "$rms" == "0.000000" ]]; then
         echo "0"
         return
     fi
-    # Scale: RMS is typically 0.0-0.3 for normal audio
-    # Amplify and cap at 100
     echo "$rms" | awk '{v = int($1 * 400); if (v > 100) v = 100; print v}'
 }
 
@@ -369,34 +373,36 @@ while true; do
             fi
         fi
 
+        # Log audio level and beat detection
+        BEAT_MARK=""
+        (( IS_BEAT )) && BEAT_MARK=" *** BEAT ***"
+        echo "[audio] level=$LEVEL avg=$(( AVG_LEVEL / 100 )) rot=$ROTATION fsb=$FRAMES_SINCE_BEAT$BEAT_MARK"
+
         # --- Apply colors based on audio level ---
+        OLD_ROTATION=$ROTATION
         if [[ "$MODE" == "club" ]]; then
             # Club: rotate EVERY frame based on volume, extra jump on beats
-            # Continuous rotation: always move, faster when louder
             if (( LEVEL > 10 )); then
                 ROTATION=$(( (ROTATION + 1) % NUM_ZONES ))
             fi
-            # On beat: extra jump for dramatic shift
             if (( IS_BEAT )); then
                 ROTATION=$(( (ROTATION + 2 + LEVEL / 25) % NUM_ZONES ))
             fi
-            # Brightness: 30% base + 70% from volume — more dramatic swings
             BRIGHT=$(( 30 + LEVEL * 70 / 100 ))
         else
-            # Auto: gentler reaction, rotate on strong beats only
             if (( IS_BEAT && LEVEL > 40 )); then
                 ROTATION=$(( (ROTATION + 1) % NUM_ZONES ))
             fi
-            # Brightness: 50% base + 50% from volume
             BRIGHT=$(( 50 + LEVEL * 50 / 100 ))
         fi
 
         ROTATED=$(rotate_palette "$PALETTE" $ROTATION)
         SCALED=$(scale_palette "$ROTATED" $BRIGHT)
+
+        echo "[apply] bright=$BRIGHT rot=$OLD_ROTATION->$ROTATION zones=$SCALED"
         nl zones $SCALED
 
-        # Audio loop runs fast (~80ms sample + send time)
-        # No extra sleep needed — rec already takes ~80ms
+        # Audio loop runs fast (~50-80ms sample + send time)
 
     # =====================
     # BPM MODE

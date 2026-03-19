@@ -72,15 +72,71 @@ nanoleaf off             # 关灯
 4. **音频响应**（默认）：通过 `sox` 实时采样音频，检测音量和节拍，驱动灯光亮度和色板旋转
 5. **BPM 旋转**（`--bpm`）：读取歌曲 BPM 元数据，按固定节拍间隔旋转色板
 
-### 音频设置
+### 音频设置（重要）
 
-默认通过麦克风拾取扬声器输出的声音。如需更精确的系统音频捕获，可安装 BlackHole：
+音频响应模式需要捕获系统正在播放的音频。由于 macOS 不允许应用直接读取系统音频输出，需要通过 BlackHole 虚拟音频设备将音频「环回」给脚本。
+
+#### 第一步：安装依赖
 
 ```bash
-brew install --cask blackhole-2ch
+brew install sox                       # 音频分析工具
+brew install ffmpeg                    # 音频捕获工具
+brew install --cask blackhole-2ch      # 虚拟音频环回设备
 ```
 
-然后在「音频 MIDI 设置」中创建多输出设备，同时包含扬声器和 BlackHole 2ch。脚本会自动检测并优先使用 BlackHole。
+安装 BlackHole 后，如果系统没有识别到设备，需要重启 Core Audio 服务：
+
+```bash
+sudo killall coreaudiod
+```
+
+macOS 会自动重新启动该服务，无需手动操作。
+
+#### 第二步：创建多输出设备
+
+需要创建一个多输出设备，让声音同时发送到扬声器（你能听到）和 BlackHole（脚本能读到）。
+
+1. 打开「音频 MIDI 设置」（`/Applications/Utilities/Audio MIDI Setup.app`，或 Spotlight 搜索 "Audio MIDI"）
+2. 点击左下角 **+** 按钮 → 选择 **创建多输出设备**
+3. 在右侧勾选：
+   - **MacBook Pro 扬声器**（或你使用的扬声器/耳机）
+   - **BlackHole 2ch**
+4. 可选：右键点击该多输出设备 → 选择「使用此设备进行声音输出」
+
+#### 第三步：切换系统声音输出
+
+1. 打开 **系统设置** → **声音** → **输出**
+2. 选择你刚创建的 **多输出设备**（不要直接选扬声器或 BlackHole）
+
+> **注意**：如果只选 BlackHole 作为输出，你将听不到声音；如果只选扬声器，脚本将无法捕获音频。必须选择多输出设备才能两者兼得。
+
+#### 第四步：验证
+
+播放音乐后，运行以下命令确认能捕获到音频：
+
+```bash
+ffmpeg -f avfoundation -i ":1" -t 0.5 -f wav -ac 1 -ar 16000 pipe:1 2>/dev/null \
+  | sox -t wav - -n stat 2>&1 | grep "RMS"
+```
+
+如果 `RMS amplitude` 值大于 0（如 `0.051229`），说明配置成功。如果为 0，请检查：
+- 系统输出是否选择了多输出设备
+- 多输出设备中是否勾选了 BlackHole 2ch
+- Apple Music 是否正在播放
+
+> **提示**：`:1` 是 BlackHole 的设备索引号。如果你的系统上索引不同，可通过以下命令查看：
+> ```bash
+> ffmpeg -f avfoundation -list_devices true -i "" 2>&1 | grep -i "audio\|BlackHole"
+> ```
+
+#### 使用 BPM 模式（无需音频配置）
+
+如果不想配置 BlackHole，可以使用 `--bpm` 模式，仅根据歌曲 BPM 元数据控制灯光旋转速度，无需任何音频捕获：
+
+```bash
+./music.sh --bpm        # BPM 定时旋转
+./music.sh --club --bpm # 夜店配色 + BPM 旋转
+```
 
 ### 状态行为
 
@@ -94,7 +150,10 @@ brew install --cask blackhole-2ch
 - Python 3（推荐通过 Homebrew 安装）
 - Python `hid` 库
 - Nanoleaf PC Screen Mirror Lightstrip（NL82K2），通过 USB-C 连接
-- `sox`（音频响应模式需要，`brew install sox`）
-- BlackHole（可选，用于直接捕获系统音频，`brew install --cask blackhole-2ch`）
+- `ffmpeg`（音频捕获，`brew install ffmpeg`）
+- `sox`（音频分析，`brew install sox`）
+- BlackHole 2ch（音频环回，`brew install --cask blackhole-2ch`）
+
+> `ffmpeg`、`sox`、BlackHole 仅音频响应模式需要。使用 `--bpm` 模式则无需安装。
 
 详细安装步骤请参考 [nanoleaf-setup-guide.md](nanoleaf-setup-guide.md)。
