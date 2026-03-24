@@ -7,26 +7,32 @@ TARGET_VID = 0x37FA
 
 print("=== Nanoleaf Device Scan ===\n")
 
+# First, print all keys of the first device to understand the schema
+devices = hid.enumerate()
+if devices:
+    print(f"HID device fields: {list(devices[0].keys())}\n")
+
 found = False
-for d in hid.enumerate():
-    if d['vendor_id'] == TARGET_VID:
+for d in devices:
+    if d.get('vendor_id') == TARGET_VID:
         found = True
-        print(f"Found Nanoleaf device:")
-        print(f"  Product:  {d['product_string']}")
-        print(f"  VID:      {hex(d['vendor_id'])}")
-        print(f"  PID:      {hex(d['pid'])}")
-        print(f"  Serial:   {d['serial_number']}")
-        print(f"  Manufacturer: {d['manufacturer_string']}")
-        print(f"  Path:     {d['path']}")
+        print("Found Nanoleaf device:")
+        for key, val in d.items():
+            if isinstance(val, int) and key.endswith('_id'):
+                print(f"  {key}: {hex(val)}")
+            else:
+                print(f"  {key}: {val}")
         print()
 
 if not found:
     print("No Nanoleaf device found (VID 0x37FA).\n")
     print("All USB HID devices:\n")
-    for d in hid.enumerate():
-        name = d['product_string'] or '(unknown)'
-        mfr = d['manufacturer_string'] or '(unknown)'
-        print(f"  {mfr} - {name}  VID:{hex(d['vendor_id'])} PID:{hex(d['pid'])}")
+    for d in devices:
+        vid = hex(d.get('vendor_id', 0))
+        pid = hex(d.get('product_id', d.get('pid', 0)))
+        name = d.get('product_string', '(unknown)') or '(unknown)'
+        mfr = d.get('manufacturer_string', '(unknown)') or '(unknown)'
+        print(f"  {mfr} - {name}  VID:{vid} PID:{pid}")
     print()
     print("Troubleshooting:")
     print("  - Make sure USB-C cable is plugged in and supports data (not charge-only)")
