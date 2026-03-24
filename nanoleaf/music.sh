@@ -496,8 +496,9 @@ while true; do
         fi
 
         if [[ "$MODE" == "work" ]]; then
-            # 工作模式：固定暖白→中性白→淡蓝渐变，忽略流派
-            PALETTE=$(generate_palette 30 15 85 60 8 80 200 25 80)
+            # 工作模式：固定暖白色，忽略流派
+            # warm = RGB(255,180,100) ≈ HSV(30, 61, 100)
+            PALETTE=$(generate_palette 30 61 100 30 61 100 30 61 100)
         else
             # 夜店模式：提高饱和度
             if [[ "$MODE" == "club" ]]; then
