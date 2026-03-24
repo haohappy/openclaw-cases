@@ -554,7 +554,7 @@ while true; do
             if [[ "$MODE" == "club" ]]; then
                 # 夜店模式：纯色色块，不用渐变，像真正夜店灯光
                 # 从预设的高对比纯色组合中选择（由哈希决定）
-                local -a CLUB_SETS=(
+                CLUB_SETS=(
                     "255,0,0 0,0,255 255,255,0 255,0,255"     # 红 蓝 黄 紫
                     "255,50,0 0,255,100 255,0,200 255,200,0"   # 橙 绿 粉 黄
                     "255,0,0 0,255,255 255,255,0 255,0,100"    # 红 青 黄 粉
@@ -562,7 +562,7 @@ while true; do
                     "255,0,50 255,200,0 0,100,255 255,0,200"   # 红 黄 蓝 粉
                     "255,255,0 255,0,0 0,200,255 255,0,255"    # 黄 红 蓝 紫
                 )
-                local set_idx=$(( HASH_INT % ${#CLUB_SETS[@]} ))
+                set_idx=$(( HASH_INT % ${#CLUB_SETS[@]} ))
                 PALETTE=$(generate_block_palette ${CLUB_SETS[$set_idx]})
             else
                 PALETTE=$(generate_palette $H1 $S1 $V1 $H2 $S2 $V2 $H3 $S3 $V3)
