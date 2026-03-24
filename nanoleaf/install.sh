@@ -76,12 +76,19 @@ if ! "$PYTHON3" --version &>/dev/null; then
 fi
 ok "Python 3 found: $PYTHON3 ($("$PYTHON3" --version 2>&1))"
 
-# --- Step 4: Install Python hid library ---
+# --- Step 4: Install hidapi C library + Python hid ---
+if command -v brew &>/dev/null && ! brew list hidapi &>/dev/null; then
+    info "Installing hidapi (USB HID C library)..."
+    brew install hidapi
+    ok "hidapi installed"
+else
+    ok "hidapi installed"
+fi
+
 if "$PYTHON3" -c "import hid" 2>/dev/null; then
     ok "Python hid library installed"
 else
     info "Installing Python hid library..."
-    # Use --break-system-packages for Python 3.12+, omit for older
     PY_MINOR="$("$PYTHON3" -c 'import sys; print(sys.version_info.minor)' 2>/dev/null || echo 0)"
     if (( PY_MINOR >= 12 )); then
         "$PYTHON3" -m pip install hid --break-system-packages -q
