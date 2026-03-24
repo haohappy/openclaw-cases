@@ -357,10 +357,10 @@ while true; do
             PALETTE=$(generate_palette $H1 $S1 $V1 $H2 $S2 $V2 $H3 $S3 $V3)
         fi
         # Show palette as color names
-        local color_names=""
+        color_names=""
         for c in $PALETTE; do
             IFS=',' read -r _r _g _b <<< "$c"
-            local max_ch=$_r ch_name="红"
+            max_ch=$_r; ch_name="红"
             (( _g > max_ch )) && { max_ch=$_g; ch_name="绿"; }
             (( _b > max_ch )) && { max_ch=$_b; ch_name="蓝"; }
             if (( _r > 200 && _g > 200 && _b > 200 )); then ch_name="白"
