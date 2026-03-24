@@ -46,26 +46,12 @@ else
 fi
 
 # --- Step 3: Find or install Python 3 ---
-# Search order: Homebrew Apple Silicon, Homebrew Intel, system python3
-PYTHON3=""
-for p in /opt/homebrew/bin/python3 /usr/local/bin/python3; do
-    if command -v "$p" &>/dev/null; then
-        PYTHON3="$p"
-        break
-    fi
-done
+PYTHON3="$(which python3 2>/dev/null || true)"
 
 if [[ -z "$PYTHON3" ]]; then
-    # No Homebrew Python found, install it
-    info "Installing Python 3 via Homebrew..."
+    info "Python 3 not found, installing via Homebrew..."
     brew install python3
-    # Detect the installed path
-    for p in /opt/homebrew/bin/python3 /usr/local/bin/python3; do
-        if command -v "$p" &>/dev/null; then
-            PYTHON3="$p"
-            break
-        fi
-    done
+    PYTHON3="$(which python3 2>/dev/null || true)"
 fi
 
 if [[ -z "$PYTHON3" ]]; then
