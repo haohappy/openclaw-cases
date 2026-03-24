@@ -408,7 +408,6 @@ while true; do
         # Log audio level and beat detection
         BEAT_MARK=""
         (( IS_BEAT )) && BEAT_MARK=" *** BEAT ***"
-        echo "[audio] level=$LEVEL avg=$(( AVG_LEVEL / 100 )) rot=$ROTATION fsb=$FRAMES_SINCE_BEAT$BEAT_MARK"
 
         # --- Apply colors based on audio level ---
         OLD_ROTATION=$ROTATION
@@ -432,7 +431,6 @@ while true; do
         ROTATED=$(rotate_palette "$PALETTE" $ROTATION)
         SCALED=$(scale_palette "$ROTATED" $BRIGHT)
 
-        echo "[apply] bright=$BRIGHT rot=$OLD_ROTATION->$ROTATION zones=$SCALED"
         nl zones $SCALED
 
         # Audio loop runs fast (~50-80ms sample + send time)
