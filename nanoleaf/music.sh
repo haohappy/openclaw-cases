@@ -125,6 +125,40 @@ hsv2rgb() {
     esac
 }
 
+# --- RGB to Chinese color name ---
+rgb_to_name() {
+    local r=$1 g=$2 b=$3
+    if (( r > 200 && g > 200 && b > 200 )); then echo "白"
+    elif (( r > 200 && g > 150 && b < 120 )); then echo "暖白"
+    elif (( r > 200 && g > 200 && b < 100 )); then echo "黄"
+    elif (( r > 200 && g > 80 && g < 180 && b < 80 )); then echo "橙"
+    elif (( r > 150 && b > 150 && g < 80 )); then echo "紫"
+    elif (( r > 150 && b > 50 && b < 150 && g < 80 )); then echo "粉"
+    elif (( r > 200 && g < 80 && b < 80 )); then echo "红"
+    elif (( g > 200 && r < 80 && b < 80 )); then echo "绿"
+    elif (( b > 200 && r < 80 && g < 80 )); then echo "蓝"
+    elif (( b > 150 && g > 150 && r < 80 )); then echo "青"
+    elif (( r < 50 && g < 50 && b < 50 )); then echo "暗"
+    else
+        # Fallback: pick dominant channel
+        if (( r >= g && r >= b )); then echo "红"
+        elif (( g >= r && g >= b )); then echo "绿"
+        else echo "蓝"
+        fi
+    fi
+}
+
+# --- Show palette as color names (single-line refresh) ---
+show_palette() {
+    local palette="$1"
+    local names=""
+    for c in $palette; do
+        IFS=',' read -r _r _g _b <<< "$c"
+        names="$names$(rgb_to_name $_r $_g $_b) "
+    done
+    printf "\r  色板: %-60s" "$names"
+}
+
 # --- Generate N-zone palette from 3 anchor hues ---
 generate_palette() {
     local h1=$1 s1=$2 v1=$3 h2=$4 s2=$5 v2=$6 h3=$7 s3=$8 v3=$9
@@ -356,24 +390,8 @@ while true; do
 
             PALETTE=$(generate_palette $H1 $S1 $V1 $H2 $S2 $V2 $H3 $S3 $V3)
         fi
-        # Show palette as color names
-        color_names=""
-        for c in $PALETTE; do
-            IFS=',' read -r _r _g _b <<< "$c"
-            max_ch=$_r; ch_name="红"
-            (( _g > max_ch )) && { max_ch=$_g; ch_name="绿"; }
-            (( _b > max_ch )) && { max_ch=$_b; ch_name="蓝"; }
-            if (( _r > 200 && _g > 200 && _b > 200 )); then ch_name="白"
-            elif (( _r > 200 && _g > 150 && _b < 120 )); then ch_name="暖白"
-            elif (( _r > 200 && _g > 200 && _b < 100 )); then ch_name="黄"
-            elif (( _r > 200 && _g > 80 && _g < 180 && _b < 80 )); then ch_name="橙"
-            elif (( _r > 150 && _b > 150 && _g < 80 )); then ch_name="紫"
-            elif (( _r > 150 && _b > 50 && _b < 150 && _g < 80 )); then ch_name="粉"
-            elif (( _b > 150 && _g > 150 && _r < 80 )); then ch_name="青"
-            fi
-            color_names="$color_names $ch_name"
-        done
-        echo "  色板:$color_names"
+        echo ""
+        show_palette "$PALETTE"
     fi
 
     # =====================
@@ -432,6 +450,7 @@ while true; do
         SCALED=$(scale_palette "$ROTATED" $BRIGHT)
 
         nl zones $SCALED
+        show_palette "$SCALED"
 
         # Audio loop runs fast (~50-80ms sample + send time)
 
@@ -441,6 +460,7 @@ while true; do
     elif [[ "$SYNC" == "bpm" && "$MODE" != "work" ]]; then
         ROTATED=$(rotate_palette "$PALETTE" $ROTATION)
         nl zones $ROTATED
+        show_palette "$ROTATED"
         ROTATION=$(( (ROTATION + 1) % NUM_ZONES ))
 
         # Sleep based on BPM
