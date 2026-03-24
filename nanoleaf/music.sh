@@ -395,7 +395,9 @@ generate_random_palette() {
     local h3=$(( (h2 + spread2) % 360 )) s3=$bs v3=$bv
 
     if [[ "$MODE" == "club" ]]; then
-        h3=$(( (h1 + 180) % 360 ))
+        # 三色等分，确保暖冷色均衡
+        h2=$(( (h1 + 120) % 360 ))
+        h3=$(( (h1 + 240) % 360 ))
     fi
 
     generate_palette $h1 $s1 $v1 $h2 $s2 $v2 $h3 $s3 $v3
@@ -524,9 +526,10 @@ while true; do
             S3=$S1; V3=$V1
 
             if [[ "$MODE" == "club" ]]; then
-                # 夜店模式：锚点 3 取互补色，制造高对比
+                # 夜店模式：三色等分（120° 间隔），暖冷色均衡分布
                 S2=$(( S2 + 30 )); (( S2 > 100 )) && S2=100
-                H3=$(( (H1 + 180 + HUE_OFFSET) % 360 ))
+                H2=$(( (H1 + 120 + HUE_OFFSET % 30) % 360 ))
+                H3=$(( (H1 + 240 + HUE_OFFSET % 30) % 360 ))
             fi
 
             PALETTE=$(generate_palette $H1 $S1 $V1 $H2 $S2 $V2 $H3 $S3 $V3)
