@@ -6,7 +6,7 @@ import hid
 
 VID = 0x37FA
 PID = 0x8202
-NUM_ZONES = 9
+NUM_ZONES = 9  # default, updated at runtime by detect_zones()
 
 # 预设颜色 (R, G, B)
 COLORS = {
@@ -50,6 +50,12 @@ def cmd_brightness(dev, val):
     val = max(0, min(255, int(val)))
     send(dev, 0x09, bytes([val]))
     print(f"Brightness: {val}/255 ({val * 100 // 255}%)")
+
+def detect_zones(dev):
+    global NUM_ZONES
+    resp = send(dev, 0x03)
+    if resp and resp[3] == 0:
+        NUM_ZONES = resp[4]
 
 def cmd_color(dev, r, g, b):
     r, g, b = max(0, min(255, int(r))), max(0, min(255, int(g))), max(0, min(255, int(b)))
@@ -155,6 +161,7 @@ def main():
 
     cmd = sys.argv[1].lower()
     dev = connect()
+    detect_zones(dev)
 
     try:
         if cmd == "on":

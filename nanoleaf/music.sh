@@ -13,7 +13,14 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 NANOLEAF="$SCRIPT_DIR/nanoleaf.py"
-NUM_ZONES=9
+# Auto-detect zone count from device
+NUM_ZONES=$("$NANOLEAF" info 2>/dev/null | awk '/^Zones:/ {print $2}') || true
+if [[ -z "$NUM_ZONES" || "$NUM_ZONES" -lt 1 ]] 2>/dev/null; then
+    NUM_ZONES=9
+    echo "[warn] Could not detect zone count, defaulting to $NUM_ZONES"
+else
+    echo "[device] Detected $NUM_ZONES zones"
+fi
 
 # --- Parse args ---
 MODE="auto"       # auto, work, club
@@ -118,17 +125,21 @@ hsv2rgb() {
     esac
 }
 
-# --- Generate 9-zone palette from 3 anchor hues ---
+# --- Generate N-zone palette from 3 anchor hues ---
 generate_palette() {
     local h1=$1 s1=$2 v1=$3 h2=$4 s2=$5 v2=$6 h3=$7 s3=$8 v3=$9
     local zones=()
-    for i in $(seq 0 8); do
+    local half=$(( NUM_ZONES / 2 ))
+    (( half < 1 )) && half=1
+    local last=$(( NUM_ZONES - 1 ))
+    for (( i=0; i<NUM_ZONES; i++ )); do
         local ah as av bh bs bv t_num t_den
-        if (( i < 4 )); then
-            t_num=$i; t_den=4
+        if (( i < half )); then
+            t_num=$i; t_den=$half
             ah=$h1; as=$s1; av=$v1; bh=$h2; bs=$s2; bv=$v2
         else
-            t_num=$(( i - 4 )); t_den=4
+            t_num=$(( i - half )); t_den=$(( NUM_ZONES - half ))
+            (( t_den < 1 )) && t_den=1
             ah=$h2; as=$s2; av=$v2; bh=$h3; bs=$s3; bv=$v3
         fi
         local ih=$(( ah + (bh - ah) * t_num / t_den ))
@@ -388,7 +399,8 @@ while true; do
             if (( IS_BEAT )); then
                 ROTATION=$(( (ROTATION + 2 + LEVEL / 25) % NUM_ZONES ))
             fi
-            BRIGHT=$(( 30 + LEVEL * 70 / 100 ))
+            # Brightness: 5% base + 95% from volume — near-dark at silence, full at loud
+            BRIGHT=$(( 5 + LEVEL * 95 / 100 ))
         else
             if (( IS_BEAT && LEVEL > 40 )); then
                 ROTATION=$(( (ROTATION + 1) % NUM_ZONES ))
