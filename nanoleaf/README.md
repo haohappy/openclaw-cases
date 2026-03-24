@@ -98,7 +98,7 @@ python3 nanoleaf.py info
 ```bash
 ./music.sh              # 默认：音频响应模式
 ./music.sh --club       # 夜店模式：高饱和度，随音乐节拍快速变化
-./music.sh --work       # 工作模式：~3000K 暖白光，适中亮度，无动画
+./music.sh --work       # 工作模式：暖白光，无动画
 ./music.sh --bpm        # BPM 模式：按歌曲 BPM 旋转（不需要音频配置）
 ./music.sh --club --bpm # 夜店配色 + BPM 旋转
 ```
@@ -135,7 +135,7 @@ nanoleaf info                        # 查看设备信息
 |------|------|------|
 | 默认 | `./music.sh` | 根据流派生成渐变色板，音量驱动亮度（50%底+50%音量），强节拍时旋转 |
 | 夜店 | `./music.sh --club` | 高饱和互补色，每帧旋转，明暗波动极大（5%底+95%音量），节拍时额外跳跃 |
-| 工作 | `./music.sh --work` | ~3000K 暖白光，适中亮度（不刺眼），无动画，10 秒更新一次 |
+| 工作 | `./music.sh --work` | 暖白光（与 `nanoleaf warm` 一致），无动画，10 秒更新一次 |
 | BPM | `./music.sh --bpm` | 按歌曲 BPM 定时旋转（夜店每拍，默认每 2 拍），不需要音频捕获 |
 
 ---
