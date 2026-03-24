@@ -46,15 +46,31 @@ else
 fi
 
 # --- Step 3: Find or install Python 3 ---
-PYTHON3="$(which python3 2>/dev/null || true)"
-
-if [[ -z "$PYTHON3" ]]; then
-    info "Python 3 not found, installing via Homebrew..."
-    brew install python3
-    PYTHON3="$(which python3 2>/dev/null || true)"
+# Prefer Homebrew Python (supports pip install), fall back to system
+PYTHON3=""
+BREW_PREFIX="$(brew --prefix 2>/dev/null || echo /opt/homebrew)"
+if [[ -x "$BREW_PREFIX/bin/python3" ]]; then
+    PYTHON3="$BREW_PREFIX/bin/python3"
+elif which python3 &>/dev/null; then
+    SYS_PY="$(which python3)"
+    SYS_VER="$("$SYS_PY" -c 'import sys; print(sys.version_info.minor)' 2>/dev/null || echo 0)"
+    if (( SYS_VER >= 12 )); then
+        # Python 3.12+ supports --break-system-packages
+        PYTHON3="$SYS_PY"
+    else
+        info "System Python is 3.$SYS_VER (too old), installing Homebrew Python..."
+        brew install python3
+        PYTHON3="$BREW_PREFIX/bin/python3"
+    fi
 fi
 
-if [[ -z "$PYTHON3" ]]; then
+if [[ -z "$PYTHON3" ]] || ! "$PYTHON3" --version &>/dev/null; then
+    info "Python 3 not found, installing via Homebrew..."
+    brew install python3
+    PYTHON3="$BREW_PREFIX/bin/python3"
+fi
+
+if ! "$PYTHON3" --version &>/dev/null; then
     fail "Could not find or install Python 3"
     exit 1
 fi
@@ -65,7 +81,13 @@ if "$PYTHON3" -c "import hid" 2>/dev/null; then
     ok "Python hid library installed"
 else
     info "Installing Python hid library..."
-    "$PYTHON3" -m pip install hid --break-system-packages -q
+    # Use --break-system-packages for Python 3.12+, omit for older
+    PY_MINOR="$("$PYTHON3" -c 'import sys; print(sys.version_info.minor)' 2>/dev/null || echo 0)"
+    if (( PY_MINOR >= 12 )); then
+        "$PYTHON3" -m pip install hid --break-system-packages -q
+    else
+        "$PYTHON3" -m pip install hid -q
+    fi
     ok "Python hid library installed"
 fi
 
