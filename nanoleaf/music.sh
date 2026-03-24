@@ -395,10 +395,11 @@ generate_random_palette() {
     local h3=$(( (h2 + spread2) % 360 )) s3=$bs v3=$bv
 
     if [[ "$MODE" == "club" ]]; then
-        # 2 暖 + 1 冷：暖色占主导
-        h1=$(( hint % 100 ))  # 0-99°，红橙黄
-        h2=$(( (h1 + 40 + hint % 20) % 360 ))
-        h3=$(( (h1 + 180) % 360 ))
+        # 高对比：暖色基础 + 大跳跃对比色 + 暖色回归
+        h1=$(( hint % 80 ))
+        s1=95; v1=95; s2=95; v2=95; s3=95; v3=95
+        h2=$(( (h1 + 150 + hint % 30) % 360 ))
+        h3=$(( (h1 + 320) % 360 ))
     fi
 
     generate_palette $h1 $s1 $v1 $h2 $s2 $v2 $h3 $s3 $v3
@@ -527,17 +528,17 @@ while true; do
             S3=$S1; V3=$V1
 
             if [[ "$MODE" == "club" ]]; then
-                # 夜店模式：2 暖 + 1 冷，确保红橙黄占主导
-                # 锚点 1: 暖色基础（由流派/哈希决定，但限制在暖色区 320-60°）
-                # 锚点 2: 暖色邻近（+40-60°），保持前半段全暖色
-                # 锚点 3: 冷色对比（+180°），只占后半段，制造高光点缀
-                S2=$(( S2 + 30 )); (( S2 > 100 )) && S2=100
-                # 如果基础色不在暖色区（320-60°），强制拉回
-                if (( H1 > 60 && H1 < 320 )); then
-                    H1=$(( HUE_OFFSET % 100 ))  # 0-99°，偏红橙黄
+                # 夜店模式：高对比强色彩
+                # 锚点 1: 暖色基础，限制在红橙黄区（0-80°）
+                # 锚点 2: 大跳跃到对比色（+150°），制造强烈反差
+                # 锚点 3: 回到另一个暖色（锚点 1 - 40°），首尾呼应
+                S1=95; S2=95; S3=95  # 全部高饱和
+                V1=95; V2=95; V3=95
+                if (( H1 > 80 && H1 < 320 )); then
+                    H1=$(( HUE_OFFSET % 80 ))  # 0-79°，红橙黄
                 fi
-                H2=$(( (H1 + 40 + HUE_OFFSET % 20) % 360 ))  # 邻近暖色
-                H3=$(( (H1 + 180) % 360 ))  # 对面冷色做点缀
+                H2=$(( (H1 + 150 + HUE_OFFSET % 30) % 360 ))  # 大跳跃对比色
+                H3=$(( (H1 + 320) % 360 ))  # 回到暖色区另一端
             fi
 
             PALETTE=$(generate_palette $H1 $S1 $V1 $H2 $S2 $V2 $H3 $S3 $V3)
@@ -586,8 +587,22 @@ while true; do
             if (( IS_BEAT )); then
                 ROTATION=$(( (ROTATION + 2 + LEVEL / 25) % NUM_ZONES ))
             fi
-            # 亮度波动极大：5% 底 + 95% 音量驱动（安静近乎全暗，响时全亮）
+            # 亮度波动极大：5% 底 + 95% 音量驱动
             BRIGHT=$(( 5 + LEVEL * 95 / 100 ))
+
+            # 强节拍时闪白光：音量>70 的节拍触发全白闪烁
+            if (( IS_BEAT && LEVEL > 70 )); then
+                # 生成全白色板
+                WHITE_ZONES=""
+                for (( _w=0; _w<NUM_ZONES; _w++ )); do
+                    [[ -n "$WHITE_ZONES" ]] && WHITE_ZONES="$WHITE_ZONES "
+                    WHITE_ZONES="${WHITE_ZONES}255,255,255"
+                done
+                nl zones $WHITE_ZONES
+                show_palette "$WHITE_ZONES"
+                # 白光闪一帧后继续正常色板
+                continue
+            fi
         else
             # 默认：仅强节拍（音量>40）时旋转
             if (( IS_BEAT && LEVEL > 40 )); then
