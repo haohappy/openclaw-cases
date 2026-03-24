@@ -1,19 +1,39 @@
 #!/usr/bin/env bash
-# music.sh — Control Nanoleaf lightstrip colors based on currently playing Apple Music
-# Supports real-time audio reactive mode (default) and BPM-based rotation mode.
+#
+# music.sh — 根据 Apple Music 当前播放的音乐动态控制 Nanoleaf 灯带颜色
+#
+# 核心流程：
+#   1. 通过 osascript 查询 Apple Music 当前曲目、艺术家、流派
+#   2. 根据流派映射基础色调，用曲名 MD5 哈希产生同流派内的色彩变化
+#   3. 从 3 个锚点色在所有 zone 间线性插值，生成平滑渐变色板
+#   4. 音频响应模式：ffmpeg 捕获系统音频 → sox 分析 RMS 音量 → 驱动亮度和旋转
+#      BPM 模式：按歌曲 BPM 元数据定时旋转色板
+#   5. 终端实时显示 3 行彩色色板名称（ANSI 24-bit 真彩色）
+#
+# 三种模式：
+#   默认模式  — 根据流派自动配色，音量驱动亮度，强节拍时旋转
+#   工作模式  — 固定暖白→淡蓝渐变，无动画，适合专注
+#   夜店模式  — 高饱和互补色，每帧旋转，音量大幅驱动明暗
+#
+# 依赖：nanoleaf.py, ffmpeg, sox, BlackHole 2ch（音频模式）
 #
 # Usage:
-#   ./music.sh              # default: audio-reactive colors
-#   ./music.sh --work       # soft warm white, static, no animation
-#   ./music.sh --club       # high saturation, aggressive audio reaction
-#   ./music.sh --bpm        # BPM-based rotation (no audio capture needed)
-#   ./music.sh --bpm --club # BPM rotation + club colors
+#   ./music.sh              # 默认：音频响应模式
+#   ./music.sh --work       # 工作模式：暖白淡蓝渐变，静态
+#   ./music.sh --club       # 夜店模式：高饱和，随音量快速变化
+#   ./music.sh --bpm        # BPM 模式：按节拍旋转（不需要音频捕获）
+#   ./music.sh --club --bpm # 夜店配色 + BPM 旋转
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 NANOLEAF="$SCRIPT_DIR/nanoleaf.py"
-# Auto-detect zone count from device
+
+# ============================================================
+# 初始化：检测设备、解析参数、检测音频设备
+# ============================================================
+
+# 自动检测灯带 zone 数量（支持 9-zone、48-zone 等不同型号）
 NUM_ZONES=$("$NANOLEAF" info 2>/dev/null | awk '/^Zones:/ {print $2}') || true
 if [[ -z "$NUM_ZONES" || "$NUM_ZONES" -lt 1 ]] 2>/dev/null; then
     NUM_ZONES=9
@@ -22,9 +42,9 @@ else
     echo "[device] Detected $NUM_ZONES zones"
 fi
 
-# --- Parse args ---
-MODE="auto"       # auto, work, club
-SYNC="audio"      # audio, bpm
+# 解析命令行参数
+MODE="auto"       # auto=默认, work=工作, club=夜店
+SYNC="audio"      # audio=音频响应, bpm=节拍旋转
 for arg in "$@"; do
     case "$arg" in
         --work) MODE="work" ;;
@@ -36,16 +56,15 @@ Usage: music.sh [OPTIONS]
 
 Options:
   (default)    Audio-reactive: colors pulse and shift with the music volume
-  --work       Soft warm white, low saturation, no animation
+  --work       Warm white to light blue gradient, no animation
   --club       High saturation, aggressive audio reaction
-  --bpm        Use BPM-based rotation instead of audio (no sox needed)
+  --bpm        Use BPM-based rotation instead of audio (no audio setup needed)
 
 Modes can be combined:
   --club --bpm   Club colors with BPM rotation
 
 Audio setup:
-  Default uses microphone to pick up speaker output.
-  For best results, install BlackHole for direct system audio capture:
+  Install BlackHole for direct system audio capture:
     brew install --cask blackhole-2ch
   Then create a Multi-Output Device in Audio MIDI Setup that includes
   both your speakers and BlackHole 2ch.
@@ -54,7 +73,7 @@ USAGE
     esac
 done
 
-# --- Check sox for audio mode ---
+# 检查音频模式依赖：sox（音频分析）和 ffmpeg（音频捕获）
 if [[ "$SYNC" == "audio" ]]; then
     if ! command -v rec &>/dev/null; then
         echo "[warn] sox not found — falling back to BPM mode"
@@ -63,7 +82,8 @@ if [[ "$SYNC" == "audio" ]]; then
     fi
 fi
 
-# --- Detect audio input device ---
+# 检测音频输入设备
+# 优先使用 BlackHole（直接捕获系统音频），否则回退到默认输入设备（麦克风）
 AUDIO_INDEX=""
 if [[ "$SYNC" == "audio" ]]; then
     if ! command -v ffmpeg &>/dev/null; then
@@ -71,21 +91,24 @@ if [[ "$SYNC" == "audio" ]]; then
         echo "  Install with: brew install ffmpeg"
         SYNC="bpm"
     else
-        # Find BlackHole device index via ffmpeg
+        # 通过 ffmpeg 列出 avfoundation 设备，查找 BlackHole 的索引号
         BH_INDEX=$(ffmpeg -f avfoundation -list_devices true -i "" 2>&1 \
             | grep -i "BlackHole" | head -1 | sed 's/.*\[\([0-9]*\)\].*/\1/' || true)
         if [[ -n "$BH_INDEX" ]]; then
             AUDIO_INDEX="$BH_INDEX"
             echo "[audio] Using BlackHole (device index $BH_INDEX)"
         else
-            # Fall back to default input device (index 0)
             AUDIO_INDEX="0"
             echo "[audio] BlackHole not found, using default input device"
         fi
     fi
 fi
 
-# --- Cleanup on exit: set warm white ---
+# ============================================================
+# 生命周期管理
+# ============================================================
+
+# Ctrl+C 或终止信号时，恢复灯带为暖白光
 cleanup() {
     echo ""
     echo "Exiting — setting warm white..."
@@ -94,15 +117,19 @@ cleanup() {
 }
 trap cleanup INT TERM
 
-# --- Helper: call nanoleaf.py, warn on failure ---
+# 调用 nanoleaf.py 的封装函数，失败时打印警告但不中断
 nl() {
     if ! "$NANOLEAF" "$@" >/dev/null 2>&1; then
         echo "  [warn] nanoleaf.py $* failed"
     fi
 }
 
-# --- HSV to RGB (pure bash integer math) ---
-# H: 0-359, S: 0-100, V: 0-100 -> echoes "R,G,B"
+# ============================================================
+# 颜色工具函数
+# ============================================================
+
+# HSV 转 RGB（纯 bash 整数运算，无需外部工具）
+# 输入：H(0-359) S(0-100) V(0-100)  输出："R,G,B"
 hsv2rgb() {
     local h=$1 s=$2 v=$3
     local vs=$(( v * 255 / 100 ))
@@ -125,7 +152,8 @@ hsv2rgb() {
     esac
 }
 
-# --- RGB to colored Chinese color name (with ANSI true color) ---
+# RGB 值映射为中文颜色名，并用 ANSI 24-bit 真彩色渲染
+# 输入：R G B（0-255）  输出：带颜色转义码的中文名
 rgb_colored_name() {
     local r=$1 g=$2 b=$3 name
     if (( r > 200 && g > 200 && b > 200 )); then name="白"
@@ -145,16 +173,17 @@ rgb_colored_name() {
         else name="蓝"
         fi
     fi
-    # Use actual RGB as ANSI 24-bit foreground color
+    # \033[38;2;R;G;Bm 为 ANSI 24-bit 前景色，\033[0m 重置
     printf "\033[38;2;%d;%d;%dm%s\033[0m" "$r" "$g" "$b" "$name"
 }
 
-# --- Show palette as 3 rows of colored names ---
+# 将色板分 3 行显示，每个颜色名用实际 RGB 真彩色渲染
+# 使用 ANSI 光标控制在原位刷新，避免终端刷屏
 show_palette() {
     local -a colors=($1)
     local total=${#colors[@]}
     local per_row=$(( (total + 2) / 3 ))
-    # Move cursor up 3 lines to overwrite previous output (except first call)
+    # 非首次调用时，将光标上移 3 行覆盖上次输出
     if [[ "${PALETTE_SHOWN:-}" == "1" ]]; then
         printf "\033[3A"
     fi
@@ -170,11 +199,17 @@ show_palette() {
             rgb_colored_name $_r $_g $_b
             printf " "
         done
-        printf "%-20s\n" ""  # clear rest of line
+        printf "%-20s\n" ""  # 清除行尾残留字符
     done
 }
 
-# --- Generate N-zone palette from 3 anchor hues ---
+# ============================================================
+# 色板生成与变换
+# ============================================================
+
+# 从 3 个 HSV 锚点色生成 N-zone 渐变色板
+# 前半段从锚点 1 插值到锚点 2，后半段从锚点 2 插值到锚点 3
+# 输入：h1 s1 v1 h2 s2 v2 h3 s3 v3  输出：空格分隔的 "R,G,B" 列表
 generate_palette() {
     local h1=$1 s1=$2 v1=$3 h2=$4 s2=$5 v2=$6 h3=$7 s3=$8 v3=$9
     local zones=()
@@ -201,7 +236,7 @@ generate_palette() {
     echo "${zones[*]}"
 }
 
-# --- Rotate palette array by n positions ---
+# 将色板循环右移 n 个位置（实现颜色流动动画）
 rotate_palette() {
     local -a colors=($1)
     local n=$2
@@ -215,7 +250,8 @@ rotate_palette() {
     echo "${result[*]}"
 }
 
-# --- Scale palette brightness: multiply each RGB channel by factor (0-100)/100 ---
+# 按百分比缩放色板亮度（用于音量驱动明暗变化）
+# factor: 0=全黑, 100=原始亮度
 scale_palette() {
     local -a colors=($1)
     local factor=$2  # 0-100
@@ -233,32 +269,43 @@ scale_palette() {
     echo "${result[*]}"
 }
 
-# --- Genre -> base hue + saturation ---
+# ============================================================
+# 音乐流派 → 颜色映射
+# ============================================================
+
+# 流派映射为 HSV 基础色调（双层策略的第一层）
+# 返回 "H S V"，未匹配的流派返回空字符串（由曲名哈希决定颜色）
 genre_to_hsv() {
     local genre
     genre=$(echo "$1" | tr '[:upper:]' '[:lower:]')
     case "$genre" in
-        *rock*|*metal*|*punk*)       echo "10 85 90" ;;
-        *jazz*|*soul*)               echo "260 70 80" ;;
+        *rock*|*metal*|*punk*)       echo "10 85 90" ;;   # 红橙：热烈
+        *jazz*|*soul*)               echo "260 70 80" ;;  # 蓝紫：深邃
         *electro*|*edm*|*techno*|*house*|*dance*)
-                                     echo "290 80 90" ;;
-        *pop*)                       echo "330 65 90" ;;
-        *classical*|*orchestra*)     echo "40 60 85" ;;
+                                     echo "290 80 90" ;;  # 紫粉：电子感
+        *pop*)                       echo "330 65 90" ;;  # 粉红：明快
+        *classical*|*orchestra*)     echo "40 60 85" ;;   # 金琥珀：典雅
         *ambient*|*chill*|*lofi*|*lo-fi*)
-                                     echo "190 50 70" ;;
-        *hip*hop*|*rap*|*trap*)      echo "270 75 85" ;;
-        *rnb*|*"r&b"*|*R\&B*)       echo "300 60 80" ;;
-        *country*|*folk*|*bluegrass*)echo "30 70 80" ;;
-        *blues*)                     echo "220 65 75" ;;
-        *reggae*|*ska*)              echo "120 70 80" ;;
-        *latin*|*salsa*|*bossa*)     echo "20 80 90" ;;
-        *indie*|*alternative*)       echo "170 55 80" ;;
-        *soundtrack*|*cinematic*)    echo "50 45 85" ;;
-        *)                           echo "" ;;
+                                     echo "190 50 70" ;;  # 青蓝：舒缓
+        *hip*hop*|*rap*|*trap*)      echo "270 75 85" ;;  # 紫色：律动
+        *rnb*|*"r&b"*|*R\&B*)       echo "300 60 80" ;;  # 洋红：柔情
+        *country*|*folk*|*bluegrass*)echo "30 70 80" ;;   # 暖橙：田园
+        *blues*)                     echo "220 65 75" ;;  # 深蓝：忧郁
+        *reggae*|*ska*)              echo "120 70 80" ;;  # 绿色：自然
+        *latin*|*salsa*|*bossa*)     echo "20 80 90" ;;   # 暖红橙：热情
+        *indie*|*alternative*)       echo "170 55 80" ;;  # 青绿：独立
+        *soundtrack*|*cinematic*)    echo "50 45 85" ;;   # 暖金：电影感
+        *)                           echo "" ;;           # 未知：由哈希决定
     esac
 }
 
-# --- Get Apple Music info via osascript ---
+# ============================================================
+# Apple Music 信息查询
+# ============================================================
+
+# 通过 osascript 查询 Apple Music 当前播放状态
+# 先用 pgrep 检查 Music.app 是否运行（避免 osascript 误启动应用）
+# 返回格式："曲名|艺术家|流派|BPM"，未播放时返回 "|||stopped"
 get_music_info() {
     if ! pgrep -xq "Music"; then
         echo "|||stopped"
@@ -287,14 +334,18 @@ get_music_info() {
     echo "$info"
 }
 
-# --- Get audio level via ffmpeg (0-100) ---
-# Captures a short audio sample, pipes to sox for RMS analysis
+# ============================================================
+# 音频采样与分析
+# ============================================================
+
+# 通过 ffmpeg + sox 获取实时音频音量（0-100）
+# ffmpeg 从 BlackHole（或默认输入）捕获短音频片段，管道传给 sox 分析 RMS 振幅
+# club 模式采样更短（50ms）以获得更快响应，默认 80ms
 get_audio_level() {
     local sample_len=0.08
     [[ "$MODE" == "club" ]] && sample_len=0.05
     local rms
-    # ffmpeg captures from avfoundation audio device, outputs raw PCM to sox for analysis
-    # Subshell to avoid pipefail killing the script
+    # 在子 shell 中关闭 pipefail，避免 ffmpeg 非零退出码导致脚本终止
     rms=$(set +o pipefail; ffmpeg -f avfoundation -i ":${AUDIO_INDEX}" -t "$sample_len" -f wav -ac 1 -ar 16000 pipe:1 2>/dev/null \
         | sox -t wav - -n stat 2>&1 \
         | awk '/RMS.*amplitude/ {print $3; exit}')
@@ -302,10 +353,14 @@ get_audio_level() {
         echo "0"
         return
     fi
+    # RMS 通常 0.0-0.3，乘以 400 映射到 0-100 范围
     echo "$rms" | awk '{v = int($1 * 400); if (v > 100) v = 100; print v}'
 }
 
-# --- Main loop ---
+# ============================================================
+# 主循环
+# ============================================================
+
 echo "=== Nanoleaf Music Sync ==="
 echo "Mode: $MODE | Sync: $SYNC"
 echo "Press Ctrl+C to exit (restores warm white)"
@@ -314,16 +369,15 @@ echo ""
 LAST_TRACK=""
 ROTATION=0
 PALETTE=""
-# Beat detection state (for audio mode)
-AVG_LEVEL=0        # running average (scaled x100 for integer math)
-BEAT_THRESHOLD=15   # minimum level to count as a beat
-FRAMES_SINCE_BEAT=0
-FRAME_COUNT=0       # track frame count for periodic music info poll
+AVG_LEVEL=0         # 音量指数移动平均值（×100 用于整数运算）
+BEAT_THRESHOLD=15   # 最低音量阈值，低于此值不判定为节拍
+FRAMES_SINCE_BEAT=0 # 距上次节拍的帧数（防止连续误判）
+FRAME_COUNT=0       # 帧计数器，用于降低 osascript 轮询频率
 
 while true; do
-    # --- Get current track info (poll less often in audio mode to reduce latency) ---
+    # --- 获取当前曲目信息 ---
+    # 音频模式下降低轮询频率（每 ~30 帧 ≈ 2.5 秒），减少 osascript 延迟
     if [[ "$SYNC" == "audio" && "$MODE" != "work" && -n "$LAST_TRACK" && "$LAST_TRACK" != "__idle__" ]]; then
-        # In audio mode, only poll music info every ~30 frames (~2.5s)
         FRAME_COUNT=$(( FRAME_COUNT + 1 ))
         if (( FRAME_COUNT >= 30 )); then
             FRAME_COUNT=0
@@ -336,7 +390,7 @@ while true; do
         FRAME_COUNT=0
     fi
 
-    # --- No music playing ---
+    # --- 无音乐播放时：切换为暗暖光 ---
     if [[ -z "$TRACK" || "$BPM" == "stopped" ]]; then
         if [[ "$LAST_TRACK" != "__idle__" ]]; then
             echo "[idle] No music playing — dim warm light"
@@ -347,7 +401,7 @@ while true; do
         continue
     fi
 
-    # --- Track changed: regenerate palette ---
+    # --- 曲目切换时：重新生成色板 ---
     if [[ "$TRACK" != "$LAST_TRACK" ]]; then
         LAST_TRACK="$TRACK"
         ROTATION=0
@@ -357,39 +411,41 @@ while true; do
         echo ""
         echo "[now playing] $TRACK — $ARTIST ${GENRE:+(${GENRE})} ${BPM:+[${BPM} BPM]}"
 
-        # Hash the track name for color variation
+        # 双层颜色策略：
+        # 第一层 — 流派映射为基础色调
+        # 第二层 — 曲名 MD5 哈希产生偏移，使同流派不同歌曲有色彩变化
         HASH=$(md5 -qs "$TRACK" 2>/dev/null || echo "$TRACK" | md5sum | cut -d' ' -f1)
         HASH_INT=$(( 16#${HASH:0:6} ))
-        HUE_OFFSET=$(( HASH_INT % 60 ))
-        SAT_OFFSET=$(( (HASH_INT / 60) % 20 - 10 ))
+        HUE_OFFSET=$(( HASH_INT % 60 ))           # 色相偏移 0-59°
+        SAT_OFFSET=$(( (HASH_INT / 60) % 20 - 10 ))  # 饱和度偏移 -10 到 +10
 
-        # Get base HSV from genre
         BASE_HSV=$(genre_to_hsv "$GENRE")
         if [[ -n "$BASE_HSV" ]]; then
             read -r BASE_H BASE_S BASE_V <<< "$BASE_HSV"
         else
+            # 流派未匹配时，完全由哈希决定基础色相
             BASE_H=$(( HASH_INT % 360 ))
             BASE_S=70
             BASE_V=85
         fi
 
         if [[ "$MODE" == "work" ]]; then
-            # Fixed warm white -> light blue gradient, ignore genre
+            # 工作模式：固定暖白→中性白→淡蓝渐变，忽略流派
             PALETTE=$(generate_palette 30 15 85 60 8 80 200 25 80)
         else
-            # Mode adjustments
+            # 夜店模式：提高饱和度
             if [[ "$MODE" == "club" ]]; then
                 BASE_S=$(( BASE_S + 10 )); (( BASE_S > 100 )) && BASE_S=100; BASE_V=95
             fi
 
-            # Generate 3 anchor points
+            # 从基础色调生成 3 个锚点，间隔 40-80°（由哈希控制）
             H1=$(( (BASE_H + HUE_OFFSET) % 360 ))
             S1=$(( BASE_S + SAT_OFFSET ))
             (( S1 < 0 )) && S1=0; (( S1 > 100 )) && S1=100
             V1=$BASE_V
 
-            SPREAD1=$(( 40 + HASH_INT % 40 ))
-            SPREAD2=$(( 40 + (HASH_INT / 100) % 40 ))
+            SPREAD1=$(( 40 + HASH_INT % 40 ))       # 锚点 1→2 色相间距
+            SPREAD2=$(( 40 + (HASH_INT / 100) % 40 ))  # 锚点 2→3 色相间距
 
             H2=$(( (H1 + SPREAD1) % 360 ))
             S2=$(( S1 + (HASH_INT / 1000 % 20 - 10) ))
@@ -401,6 +457,7 @@ while true; do
             S3=$S1; V3=$V1
 
             if [[ "$MODE" == "club" ]]; then
+                # 夜店模式：锚点 3 取互补色，制造高对比
                 S2=$(( S2 + 30 )); (( S2 > 100 )) && S2=100
                 H3=$(( (H1 + 180 + HUE_OFFSET) % 360 ))
             fi
@@ -411,20 +468,20 @@ while true; do
         show_palette "$PALETTE"
     fi
 
-    # =====================
-    # AUDIO-REACTIVE MODE
-    # =====================
+    # =============================================
+    # 音频响应模式：实时听取音乐声音驱动灯光
+    # =============================================
     if [[ "$SYNC" == "audio" && "$MODE" != "work" ]]; then
         LEVEL=$(get_audio_level)
 
-        # Update running average (exponential moving average, integer math x100)
-        # avg = avg * 0.85 + level * 0.15
+        # 指数移动平均：平滑音量波动，用于节拍检测的基线
+        # avg = avg × 0.85 + level × 0.15（整数运算，值放大 100 倍）
         AVG_LEVEL=$(( AVG_LEVEL * 85 / 100 + LEVEL * 15 ))
 
-        # Beat detection: level significantly above average
+        # 节拍检测：当前音量显著高于移动平均值时判定为节拍
         IS_BEAT=0
         if [[ "$MODE" == "club" ]]; then
-            # Club: lower threshold, faster reset — detect more beats
+            # 夜店：更灵敏（1.2 倍平均值），最小间隔 1 帧
             if (( LEVEL > BEAT_THRESHOLD && LEVEL * 100 > AVG_LEVEL * 120 && FRAMES_SINCE_BEAT > 1 )); then
                 IS_BEAT=1
                 FRAMES_SINCE_BEAT=0
@@ -432,6 +489,7 @@ while true; do
                 FRAMES_SINCE_BEAT=$(( FRAMES_SINCE_BEAT + 1 ))
             fi
         else
+            # 默认：较保守（1.5 倍平均值），最小间隔 2 帧
             if (( LEVEL > BEAT_THRESHOLD && LEVEL * 100 > AVG_LEVEL * 150 && FRAMES_SINCE_BEAT > 2 )); then
                 IS_BEAT=1
                 FRAMES_SINCE_BEAT=0
@@ -440,26 +498,24 @@ while true; do
             fi
         fi
 
-        # Log audio level and beat detection
-        BEAT_MARK=""
-        (( IS_BEAT )) && BEAT_MARK=" *** BEAT ***"
-
-        # --- Apply colors based on audio level ---
+        # 根据音量和节拍驱动色板旋转和亮度
         OLD_ROTATION=$ROTATION
         if [[ "$MODE" == "club" ]]; then
-            # Club: rotate EVERY frame based on volume, extra jump on beats
+            # 夜店：每帧都旋转（音量>10），节拍时额外跳跃
             if (( LEVEL > 10 )); then
                 ROTATION=$(( (ROTATION + 1) % NUM_ZONES ))
             fi
             if (( IS_BEAT )); then
                 ROTATION=$(( (ROTATION + 2 + LEVEL / 25) % NUM_ZONES ))
             fi
-            # Brightness: 5% base + 95% from volume — near-dark at silence, full at loud
+            # 亮度波动极大：5% 底 + 95% 音量驱动（安静近乎全暗，响时全亮）
             BRIGHT=$(( 5 + LEVEL * 95 / 100 ))
         else
+            # 默认：仅强节拍（音量>40）时旋转
             if (( IS_BEAT && LEVEL > 40 )); then
                 ROTATION=$(( (ROTATION + 1) % NUM_ZONES ))
             fi
+            # 亮度较稳定：50% 底 + 50% 音量驱动
             BRIGHT=$(( 50 + LEVEL * 50 / 100 ))
         fi
 
@@ -469,26 +525,27 @@ while true; do
         nl zones $SCALED
         show_palette "$SCALED"
 
-        # Audio loop runs fast (~50-80ms sample + send time)
+        # 无需额外 sleep — ffmpeg 采样本身耗时 ~50-80ms
 
-    # =====================
-    # BPM MODE
-    # =====================
+    # =============================================
+    # BPM 模式：按歌曲节拍定时旋转色板
+    # =============================================
     elif [[ "$SYNC" == "bpm" && "$MODE" != "work" ]]; then
         ROTATED=$(rotate_palette "$PALETTE" $ROTATION)
         nl zones $ROTATED
         show_palette "$ROTATED"
         ROTATION=$(( (ROTATION + 1) % NUM_ZONES ))
 
-        # Sleep based on BPM
+        # 根据 BPM 计算旋转间隔
         if [[ -n "$BPM" && "$BPM" -gt 0 ]] 2>/dev/null; then
             if [[ "$MODE" == "club" ]]; then
-                INTERVAL=$(echo "scale=2; 60 / $BPM" | bc 2>/dev/null || echo "0.5")
+                INTERVAL=$(echo "scale=2; 60 / $BPM" | bc 2>/dev/null || echo "0.5")  # 每拍
             else
-                INTERVAL=$(echo "scale=2; 120 / $BPM" | bc 2>/dev/null || echo "3")
+                INTERVAL=$(echo "scale=2; 120 / $BPM" | bc 2>/dev/null || echo "3")   # 每 2 拍
             fi
             sleep "$INTERVAL"
         else
+            # 无 BPM 数据时的回退间隔
             if [[ "$MODE" == "club" ]]; then
                 sleep 0.5
             else
@@ -496,9 +553,9 @@ while true; do
             fi
         fi
 
-    # =====================
-    # WORK MODE (static)
-    # =====================
+    # =============================================
+    # 工作模式：静态灯光，长间隔轮询
+    # =============================================
     else
         nl zones $PALETTE
         sleep 10
