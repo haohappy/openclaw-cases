@@ -125,38 +125,53 @@ hsv2rgb() {
     esac
 }
 
-# --- RGB to Chinese color name ---
-rgb_to_name() {
-    local r=$1 g=$2 b=$3
-    if (( r > 200 && g > 200 && b > 200 )); then echo "白"
-    elif (( r > 200 && g > 150 && b < 120 )); then echo "暖白"
-    elif (( r > 200 && g > 200 && b < 100 )); then echo "黄"
-    elif (( r > 200 && g > 80 && g < 180 && b < 80 )); then echo "橙"
-    elif (( r > 150 && b > 150 && g < 80 )); then echo "紫"
-    elif (( r > 150 && b > 50 && b < 150 && g < 80 )); then echo "粉"
-    elif (( r > 200 && g < 80 && b < 80 )); then echo "红"
-    elif (( g > 200 && r < 80 && b < 80 )); then echo "绿"
-    elif (( b > 200 && r < 80 && g < 80 )); then echo "蓝"
-    elif (( b > 150 && g > 150 && r < 80 )); then echo "青"
-    elif (( r < 50 && g < 50 && b < 50 )); then echo "暗"
+# --- RGB to colored Chinese color name (with ANSI true color) ---
+rgb_colored_name() {
+    local r=$1 g=$2 b=$3 name
+    if (( r > 200 && g > 200 && b > 200 )); then name="白"
+    elif (( r > 200 && g > 150 && b < 120 )); then name="暖白"
+    elif (( r > 200 && g > 200 && b < 100 )); then name="黄"
+    elif (( r > 200 && g > 80 && g < 180 && b < 80 )); then name="橙"
+    elif (( r > 150 && b > 150 && g < 80 )); then name="紫"
+    elif (( r > 150 && b > 50 && b < 150 && g < 80 )); then name="粉"
+    elif (( r > 200 && g < 80 && b < 80 )); then name="红"
+    elif (( g > 200 && r < 80 && b < 80 )); then name="绿"
+    elif (( b > 200 && r < 80 && g < 80 )); then name="蓝"
+    elif (( b > 150 && g > 150 && r < 80 )); then name="青"
+    elif (( r < 50 && g < 50 && b < 50 )); then name="暗"
     else
-        # Fallback: pick dominant channel
-        if (( r >= g && r >= b )); then echo "红"
-        elif (( g >= r && g >= b )); then echo "绿"
-        else echo "蓝"
+        if (( r >= g && r >= b )); then name="红"
+        elif (( g >= r && g >= b )); then name="绿"
+        else name="蓝"
         fi
     fi
+    # Use actual RGB as ANSI 24-bit foreground color
+    printf "\033[38;2;%d;%d;%dm%s\033[0m" "$r" "$g" "$b" "$name"
 }
 
-# --- Show palette as color names (single-line refresh) ---
+# --- Show palette as 3 rows of colored names ---
 show_palette() {
-    local palette="$1"
-    local names=""
-    for c in $palette; do
-        IFS=',' read -r _r _g _b <<< "$c"
-        names="$names$(rgb_to_name $_r $_g $_b) "
+    local -a colors=($1)
+    local total=${#colors[@]}
+    local per_row=$(( (total + 2) / 3 ))
+    # Move cursor up 3 lines to overwrite previous output (except first call)
+    if [[ "${PALETTE_SHOWN:-}" == "1" ]]; then
+        printf "\033[3A"
+    fi
+    PALETTE_SHOWN=1
+    local row=0
+    for (( row=0; row<3; row++ )); do
+        local start=$(( row * per_row ))
+        local end=$(( start + per_row ))
+        (( end > total )) && end=$total
+        printf "  "
+        for (( i=start; i<end; i++ )); do
+            IFS=',' read -r _r _g _b <<< "${colors[$i]}"
+            rgb_colored_name $_r $_g $_b
+            printf " "
+        done
+        printf "%-20s\n" ""  # clear rest of line
     done
-    printf "\r  色板: %-60s" "$names"
 }
 
 # --- Generate N-zone palette from 3 anchor hues ---
@@ -338,6 +353,8 @@ while true; do
         ROTATION=0
         AVG_LEVEL=0
         FRAMES_SINCE_BEAT=0
+        PALETTE_SHOWN=0
+        echo ""
         echo "[now playing] $TRACK — $ARTIST ${GENRE:+(${GENRE})} ${BPM:+[${BPM} BPM]}"
 
         # Hash the track name for color variation
