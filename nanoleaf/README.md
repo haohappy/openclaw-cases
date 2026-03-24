@@ -26,6 +26,8 @@ cd nanoleaf
 ./install.sh
 ```
 
+> **注意**：安装过程中会提示输入系统密码（`Password:`），这是安装 BlackHole 音频驱动和重启 Core Audio 服务所需的 `sudo` 权限。
+
 安装脚本会自动完成以下工作：
 - 安装 Homebrew（如果没有）
 - 安装 Python 3 和 hid 库
