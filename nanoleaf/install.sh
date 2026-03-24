@@ -45,15 +45,34 @@ else
     ok "Homebrew installed"
 fi
 
-# --- Step 3: Install Python 3 (Homebrew version required) ---
-if command -v /opt/homebrew/bin/python3 &>/dev/null; then
-    ok "Homebrew Python 3 installed ($(/opt/homebrew/bin/python3 --version 2>&1))"
-else
+# --- Step 3: Find or install Python 3 ---
+# Search order: Homebrew Apple Silicon, Homebrew Intel, system python3
+PYTHON3=""
+for p in /opt/homebrew/bin/python3 /usr/local/bin/python3; do
+    if command -v "$p" &>/dev/null; then
+        PYTHON3="$p"
+        break
+    fi
+done
+
+if [[ -z "$PYTHON3" ]]; then
+    # No Homebrew Python found, install it
     info "Installing Python 3 via Homebrew..."
     brew install python3
-    ok "Python 3 installed"
+    # Detect the installed path
+    for p in /opt/homebrew/bin/python3 /usr/local/bin/python3; do
+        if command -v "$p" &>/dev/null; then
+            PYTHON3="$p"
+            break
+        fi
+    done
 fi
-PYTHON3="/opt/homebrew/bin/python3"
+
+if [[ -z "$PYTHON3" ]]; then
+    fail "Could not find or install Python 3"
+    exit 1
+fi
+ok "Python 3 found: $PYTHON3 ($("$PYTHON3" --version 2>&1))"
 
 # --- Step 4: Install Python hid library ---
 if "$PYTHON3" -c "import hid" 2>/dev/null; then
