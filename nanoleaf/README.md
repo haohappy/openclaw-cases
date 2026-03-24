@@ -50,8 +50,8 @@ cd nanoleaf
 
 1. 打开 **音频 MIDI 设置**（Spotlight 搜索 "Audio MIDI"，或打开 `/Applications/Utilities/Audio MIDI Setup.app`）
 2. 点击左下角 **+** → **创建多输出设备**
-3. 在右侧勾选：
-   - **MacBook Pro 扬声器**（或 Mac Mini 扬声器，或你使用的外接音箱/耳机）
+3. 在右侧勾选以下两项：
+   - 你的音频输出设备（MacBook Pro 扬声器 / Mac Mini 扬声器 / 蓝牙音箱 / 外接音箱 / 耳机）
    - **BlackHole 2ch**
 
 #### 3.2 切换系统声音输出
@@ -80,7 +80,8 @@ ffmpeg -f avfoundation -i ":1" -t 0.5 -f wav -ac 1 -ar 16000 pipe:1 2>/dev/null 
 ### 4. 连接灯带
 
 - 用 USB-C 线将 Nanoleaf 灯带连接到 Mac
-- 确保 **Nanoleaf Desktop App 已关闭**（设备是独占访问的）
+- **不需要**安装 Nanoleaf 官方 Desktop App，脚本直接通过 USB HID 协议控制灯带
+- 如果已安装 Nanoleaf Desktop App，必须先关闭（设备是独占访问的）
 
 ```bash
 # 关闭 Nanoleaf Desktop App
@@ -158,6 +159,7 @@ nanoleaf info                        # 查看设备信息
 | 依赖 | 用途 | 安装命令 |
 |------|------|----------|
 | Python 3 | 灯带 HID 通信 | `brew install python3` |
+| hidapi | USB HID C 库 | `brew install hidapi` |
 | hid | Python USB HID 库 | `pip install hid` |
 | ffmpeg | 音频捕获 | `brew install ffmpeg` |
 | sox | 音频分析 | `brew install sox` |
@@ -203,6 +205,26 @@ ModuleNotFoundError: No module named 'hid'
 /opt/homebrew/bin/python3 -m pip install hid --break-system-packages
 ```
 
+### Unable to load libhidapi
+
+```
+ImportError: Unable to load any of the following libraries:libhidapi-hidraw.so ...
+```
+
+缺少 hidapi C 库：
+
+```bash
+brew install hidapi
+```
+
+### 排查设备连接
+
+运行诊断脚本查看所有 USB HID 设备信息：
+
+```bash
+python3 diagnose.py
+```
+
 ---
 
 ## 文件说明
@@ -212,4 +234,5 @@ ModuleNotFoundError: No module named 'hid'
 | `nanoleaf.py` | 灯带控制脚本（HID 通信） |
 | `music.sh` | 音乐灯光同步脚本 |
 | `install.sh` | 一键安装脚本 |
+| `diagnose.py` | 设备连接诊断工具 |
 | `README.md` | 本文档 |
