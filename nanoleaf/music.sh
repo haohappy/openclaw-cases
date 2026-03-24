@@ -322,36 +322,40 @@ while true; do
             BASE_V=85
         fi
 
-        # Mode adjustments
-        case "$MODE" in
-            work) BASE_S=20; BASE_V=80 ;;
-            club) BASE_S=$(( BASE_S + 10 )); (( BASE_S > 100 )) && BASE_S=100; BASE_V=95 ;;
-        esac
+        if [[ "$MODE" == "work" ]]; then
+            # Fixed warm white -> light blue gradient, ignore genre
+            PALETTE=$(generate_palette 30 15 85 60 8 80 200 25 80)
+        else
+            # Mode adjustments
+            if [[ "$MODE" == "club" ]]; then
+                BASE_S=$(( BASE_S + 10 )); (( BASE_S > 100 )) && BASE_S=100; BASE_V=95
+            fi
 
-        # Generate 3 anchor points
-        H1=$(( (BASE_H + HUE_OFFSET) % 360 ))
-        S1=$(( BASE_S + SAT_OFFSET ))
-        (( S1 < 0 )) && S1=0; (( S1 > 100 )) && S1=100
-        V1=$BASE_V
+            # Generate 3 anchor points
+            H1=$(( (BASE_H + HUE_OFFSET) % 360 ))
+            S1=$(( BASE_S + SAT_OFFSET ))
+            (( S1 < 0 )) && S1=0; (( S1 > 100 )) && S1=100
+            V1=$BASE_V
 
-        SPREAD1=$(( 40 + HASH_INT % 40 ))
-        SPREAD2=$(( 40 + (HASH_INT / 100) % 40 ))
+            SPREAD1=$(( 40 + HASH_INT % 40 ))
+            SPREAD2=$(( 40 + (HASH_INT / 100) % 40 ))
 
-        H2=$(( (H1 + SPREAD1) % 360 ))
-        S2=$(( S1 + (HASH_INT / 1000 % 20 - 10) ))
-        (( S2 < 0 )) && S2=0; (( S2 > 100 )) && S2=100
-        V2=$(( V1 + (HASH_INT / 10000 % 10 - 5) ))
-        (( V2 < 30 )) && V2=30; (( V2 > 100 )) && V2=100
+            H2=$(( (H1 + SPREAD1) % 360 ))
+            S2=$(( S1 + (HASH_INT / 1000 % 20 - 10) ))
+            (( S2 < 0 )) && S2=0; (( S2 > 100 )) && S2=100
+            V2=$(( V1 + (HASH_INT / 10000 % 10 - 5) ))
+            (( V2 < 30 )) && V2=30; (( V2 > 100 )) && V2=100
 
-        H3=$(( (H2 + SPREAD2) % 360 ))
-        S3=$S1; V3=$V1
+            H3=$(( (H2 + SPREAD2) % 360 ))
+            S3=$S1; V3=$V1
 
-        if [[ "$MODE" == "club" ]]; then
-            S2=$(( S2 + 30 )); (( S2 > 100 )) && S2=100
-            H3=$(( (H1 + 180 + HUE_OFFSET) % 360 ))
+            if [[ "$MODE" == "club" ]]; then
+                S2=$(( S2 + 30 )); (( S2 > 100 )) && S2=100
+                H3=$(( (H1 + 180 + HUE_OFFSET) % 360 ))
+            fi
+
+            PALETTE=$(generate_palette $H1 $S1 $V1 $H2 $S2 $V2 $H3 $S3 $V3)
         fi
-
-        PALETTE=$(generate_palette $H1 $S1 $V1 $H2 $S2 $V2 $H3 $S3 $V3)
         echo "  palette: $PALETTE"
     fi
 
