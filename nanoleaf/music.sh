@@ -497,8 +497,8 @@ while true; do
 
         if [[ "$MODE" == "work" ]]; then
             # 工作模式：固定暖白色，忽略流派
-            # warm = RGB(255,180,100) ≈ HSV(30, 61, 100)
-            PALETTE=$(generate_palette 30 61 100 30 61 100 30 61 100)
+            # ~3000K 暖白，适中亮度：HSV(33, 50, 75) ≈ RGB(191, 153, 95)
+            PALETTE=$(generate_palette 33 50 75 33 50 75 33 50 75)
         else
             # 夜店模式：提高饱和度
             if [[ "$MODE" == "club" ]]; then
