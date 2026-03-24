@@ -4,11 +4,20 @@
 
 ## 快速开始
 
-### 1. 克隆仓库
+### 1. 获取代码
+
+首次安装：
 
 ```bash
 git clone https://github.com/haohappy/openclaw-cases.git
 cd openclaw-cases/nanoleaf
+```
+
+已经克隆过？拉取最新代码即可：
+
+```bash
+cd openclaw-cases && git pull
+cd nanoleaf
 ```
 
 ### 2. 一键安装
