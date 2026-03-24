@@ -374,6 +374,35 @@ BEAT_THRESHOLD=15   # 最低音量阈值，低于此值不判定为节拍
 FRAMES_SINCE_BEAT=0 # 距上次节拍的帧数（防止连续误判）
 FRAME_COUNT=0       # 帧计数器，用于降低 osascript 轮询频率
 
+# 生成随机色板（用于无曲目信息时纯音频驱动模式）
+# 使用当前时间戳的哈希作为随机种子
+generate_random_palette() {
+    local seed=$(date +%s%N 2>/dev/null || date +%s)
+    local hash_str=$(echo "$seed" | md5 -qs 2>/dev/null || echo "$seed" | md5sum | cut -d' ' -f1)
+    local hint=$(( 16#${hash_str:0:6} ))
+
+    local bh=$(( hint % 360 ))
+    local bs=75 bv=90
+    local spread1=$(( 40 + hint % 40 ))
+    local spread2=$(( 40 + (hint / 100) % 40 ))
+
+    if [[ "$MODE" == "club" ]]; then
+        bs=90; bv=95
+    fi
+
+    local h1=$bh s1=$bs v1=$bv
+    local h2=$(( (h1 + spread1) % 360 )) s2=$bs v2=$bv
+    local h3=$(( (h2 + spread2) % 360 )) s3=$bs v3=$bv
+
+    if [[ "$MODE" == "club" ]]; then
+        h3=$(( (h1 + 180) % 360 ))
+    fi
+
+    generate_palette $h1 $s1 $v1 $h2 $s2 $v2 $h3 $s3 $v3
+}
+
+PALETTE_CHANGE_COUNTER=0  # 纯音频模式下定时换色板的计数器
+
 while true; do
     # --- 获取当前曲目信息 ---
     # 音频模式下降低轮询频率（每 ~30 帧 ≈ 2.5 秒），减少 osascript 延迟
@@ -390,19 +419,56 @@ while true; do
         FRAME_COUNT=0
     fi
 
-    # --- 无音乐播放时：切换为暗暖光 ---
+    # --- 无 Apple Music 播放时：检测是否有其他音频源 ---
     if [[ -z "$TRACK" || "$BPM" == "stopped" ]]; then
-        if [[ "$LAST_TRACK" != "__idle__" ]]; then
-            echo "[idle] No music playing — dim warm light"
-            nl color 80 50 20
-            LAST_TRACK="__idle__"
+        if [[ "$SYNC" == "audio" && -n "$AUDIO_INDEX" ]]; then
+            # 尝试捕获音频，如果有声音则进入纯音频驱动模式
+            PROBE_LEVEL=$(get_audio_level)
+            if (( PROBE_LEVEL > 5 )); then
+                # 检测到音频但没有 Apple Music — 进入纯音频模式
+                if [[ "$LAST_TRACK" != "__audio_only__" ]]; then
+                    LAST_TRACK="__audio_only__"
+                    ROTATION=0
+                    AVG_LEVEL=0
+                    FRAMES_SINCE_BEAT=0
+                    PALETTE_SHOWN=0
+                    PALETTE_CHANGE_COUNTER=0
+                    PALETTE=$(generate_random_palette)
+                    echo ""
+                    echo "[audio only] Detected audio from other source (mpv, browser, etc.)"
+                    echo ""
+                    show_palette "$PALETTE"
+                fi
+                # 定期更换色板（约每 300 帧 ≈ 20 秒），保持新鲜感
+                PALETTE_CHANGE_COUNTER=$(( PALETTE_CHANGE_COUNTER + 1 ))
+                if (( PALETTE_CHANGE_COUNTER >= 300 )); then
+                    PALETTE_CHANGE_COUNTER=0
+                    PALETTE=$(generate_random_palette)
+                fi
+            else
+                # 没有任何音频 — 暗暖光
+                if [[ "$LAST_TRACK" != "__idle__" ]]; then
+                    echo "[idle] No audio detected — dim warm light"
+                    nl color 80 50 20
+                    LAST_TRACK="__idle__"
+                fi
+                sleep 5
+                continue
+            fi
+        else
+            # 非音频模式或无音频设备 — 暗暖光
+            if [[ "$LAST_TRACK" != "__idle__" ]]; then
+                echo "[idle] No music playing — dim warm light"
+                nl color 80 50 20
+                LAST_TRACK="__idle__"
+            fi
+            sleep 5
+            continue
         fi
-        sleep 5
-        continue
     fi
 
-    # --- 曲目切换时：重新生成色板 ---
-    if [[ "$TRACK" != "$LAST_TRACK" ]]; then
+    # --- 曲目切换时：重新生成色板（Apple Music 模式）---
+    if [[ "$TRACK" != "$LAST_TRACK" && "$LAST_TRACK" != "__audio_only__" ]]; then
         LAST_TRACK="$TRACK"
         ROTATION=0
         AVG_LEVEL=0
