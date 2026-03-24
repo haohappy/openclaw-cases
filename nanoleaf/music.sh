@@ -269,6 +269,23 @@ scale_palette() {
     echo "${result[*]}"
 }
 
+# 生成色块色板（club 模式专用）：3-4 种纯色交替填充，无渐变
+# 输入：空格分隔的 "R,G,B" 颜色列表（3-4 个）
+# 输出：NUM_ZONES 个 zone 的色板，每种颜色占连续若干 zone
+generate_block_palette() {
+    local -a src_colors=($@)
+    local n_colors=${#src_colors[@]}
+    local block_size=$(( NUM_ZONES / n_colors ))
+    (( block_size < 1 )) && block_size=1
+    local result=()
+    for (( i=0; i<NUM_ZONES; i++ )); do
+        local ci=$(( i / block_size ))
+        (( ci >= n_colors )) && ci=$(( n_colors - 1 ))
+        result+=("${src_colors[$ci]}")
+    done
+    echo "${result[*]}"
+}
+
 # ============================================================
 # 音乐流派 → 颜色映射
 # ============================================================
@@ -395,11 +412,18 @@ generate_random_palette() {
     local h3=$(( (h2 + spread2) % 360 )) s3=$bs v3=$bv
 
     if [[ "$MODE" == "club" ]]; then
-        # 高对比：暖色基础 + 大跳跃对比色 + 暖色回归
-        h1=$(( hint % 80 ))
-        s1=95; v1=95; s2=95; v2=95; s3=95; v3=95
-        h2=$(( (h1 + 150 + hint % 30) % 360 ))
-        h3=$(( (h1 + 320) % 360 ))
+        # 夜店：从预设纯色组合中随机选择色块
+        local -a CLUB_SETS=(
+            "255,0,0 0,0,255 255,255,0 255,0,255"
+            "255,50,0 0,255,100 255,0,200 255,200,0"
+            "255,0,0 0,255,255 255,255,0 255,0,100"
+            "255,100,0 0,0,255 0,255,0 255,0,0"
+            "255,0,50 255,200,0 0,100,255 255,0,200"
+            "255,255,0 255,0,0 0,200,255 255,0,255"
+        )
+        local set_idx=$(( hint % ${#CLUB_SETS[@]} ))
+        generate_block_palette ${CLUB_SETS[$set_idx]}
+        return
     fi
 
     generate_palette $h1 $s1 $v1 $h2 $s2 $v2 $h3 $s3 $v3
@@ -528,20 +552,21 @@ while true; do
             S3=$S1; V3=$V1
 
             if [[ "$MODE" == "club" ]]; then
-                # 夜店模式：高对比强色彩
-                # 锚点 1: 暖色基础，限制在红橙黄区（0-80°）
-                # 锚点 2: 大跳跃到对比色（+150°），制造强烈反差
-                # 锚点 3: 回到另一个暖色（锚点 1 - 40°），首尾呼应
-                S1=95; S2=95; S3=95  # 全部高饱和
-                V1=95; V2=95; V3=95
-                if (( H1 > 80 && H1 < 320 )); then
-                    H1=$(( HUE_OFFSET % 80 ))  # 0-79°，红橙黄
-                fi
-                H2=$(( (H1 + 150 + HUE_OFFSET % 30) % 360 ))  # 大跳跃对比色
-                H3=$(( (H1 + 320) % 360 ))  # 回到暖色区另一端
+                # 夜店模式：纯色色块，不用渐变，像真正夜店灯光
+                # 从预设的高对比纯色组合中选择（由哈希决定）
+                local -a CLUB_SETS=(
+                    "255,0,0 0,0,255 255,255,0 255,0,255"     # 红 蓝 黄 紫
+                    "255,50,0 0,255,100 255,0,200 255,200,0"   # 橙 绿 粉 黄
+                    "255,0,0 0,255,255 255,255,0 255,0,100"    # 红 青 黄 粉
+                    "255,100,0 0,0,255 0,255,0 255,0,0"        # 橙 蓝 绿 红
+                    "255,0,50 255,200,0 0,100,255 255,0,200"   # 红 黄 蓝 粉
+                    "255,255,0 255,0,0 0,200,255 255,0,255"    # 黄 红 蓝 紫
+                )
+                local set_idx=$(( HASH_INT % ${#CLUB_SETS[@]} ))
+                PALETTE=$(generate_block_palette ${CLUB_SETS[$set_idx]})
+            else
+                PALETTE=$(generate_palette $H1 $S1 $V1 $H2 $S2 $V2 $H3 $S3 $V3)
             fi
-
-            PALETTE=$(generate_palette $H1 $S1 $V1 $H2 $S2 $V2 $H3 $S3 $V3)
         fi
         echo ""
         show_palette "$PALETTE"
@@ -587,12 +612,19 @@ while true; do
             if (( IS_BEAT )); then
                 ROTATION=$(( (ROTATION + 2 + LEVEL / 25) % NUM_ZONES ))
             fi
-            # 亮度波动极大：5% 底 + 95% 音量驱动
-            BRIGHT=$(( 5 + LEVEL * 95 / 100 ))
 
-            # 强节拍时闪白光：音量>70 的节拍触发全白闪烁
-            if (( IS_BEAT && LEVEL > 70 )); then
-                # 生成全白色板
+            # 亮度：低音量时接近全黑，高音量时全亮，制造强烈闪烁
+            # level < 15 → 全黑（模拟夜店灯灭瞬间）
+            # level 15-100 → 快速拉起到全亮
+            if (( LEVEL < 15 )); then
+                BRIGHT=0
+            else
+                BRIGHT=$(( (LEVEL - 15) * 118 / 100 ))
+                (( BRIGHT > 100 )) && BRIGHT=100
+            fi
+
+            # 强节拍时闪白光：音量>60 的节拍触发全白闪烁
+            if (( IS_BEAT && LEVEL > 60 )); then
                 WHITE_ZONES=""
                 for (( _w=0; _w<NUM_ZONES; _w++ )); do
                     [[ -n "$WHITE_ZONES" ]] && WHITE_ZONES="$WHITE_ZONES "
@@ -600,7 +632,6 @@ while true; do
                 done
                 nl zones $WHITE_ZONES
                 show_palette "$WHITE_ZONES"
-                # 白光闪一帧后继续正常色板
                 continue
             fi
         else
