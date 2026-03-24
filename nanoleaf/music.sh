@@ -565,11 +565,6 @@ while true; do
             fi
         fi
 
-        # debug: 音频采样日志
-        BEAT_MARK=""
-        (( IS_BEAT )) && BEAT_MARK=" *** BEAT ***"
-        echo "[audio] level=$LEVEL avg=$(( AVG_LEVEL / 100 )) rot=$ROTATION fsb=$FRAMES_SINCE_BEAT$BEAT_MARK"
-
         # 根据音量和节拍驱动色板旋转和亮度
         OLD_ROTATION=$ROTATION
         if [[ "$MODE" == "club" ]]; then
