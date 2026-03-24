@@ -35,6 +35,11 @@ cd nanoleaf
 - 检测灯带连接状态
 - 配置 shell 别名
 
+> **提示**：安装 BlackHole 后 Homebrew 会提示需要重启电脑，实际上**不需要重启**。安装脚本会自动运行 `sudo killall coreaudiod` 重启 Core Audio 服务，BlackHole 即可被识别。如果安装脚本没有自动处理（例如没有输入 sudo 密码），手动运行：
+> ```bash
+> sudo killall coreaudiod
+> ```
+
 ### 3. 配置音频（手动，仅需一次）
 
 安装脚本会装好所有软件，但音频路由需要手动配置：
