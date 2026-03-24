@@ -1,4 +1,4 @@
-#!/opt/homebrew/bin/python3
+#!/usr/bin/env python3
 """nanoleaf.py - Control Nanoleaf PC Screen Mirror Lightstrip via USB HID"""
 
 import sys

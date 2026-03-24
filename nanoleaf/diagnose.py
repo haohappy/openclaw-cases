@@ -1,4 +1,4 @@
-#!/opt/homebrew/bin/python3
+#!/usr/bin/env python3
 """diagnose.py - Check Nanoleaf lightstrip connection and list USB HID devices"""
 
 import hid

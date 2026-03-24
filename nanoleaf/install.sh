@@ -45,17 +45,17 @@ else
     ok "Homebrew installed"
 fi
 
-# --- Step 3: Install Python 3 ---
-if command -v /opt/homebrew/bin/python3 &>/dev/null || command -v python3 &>/dev/null; then
-    ok "Python 3 installed ($(python3 --version 2>&1))"
+# --- Step 3: Install Python 3 (Homebrew version required) ---
+if command -v /opt/homebrew/bin/python3 &>/dev/null; then
+    ok "Homebrew Python 3 installed ($(/opt/homebrew/bin/python3 --version 2>&1))"
 else
-    info "Installing Python 3..."
+    info "Installing Python 3 via Homebrew..."
     brew install python3
     ok "Python 3 installed"
 fi
+PYTHON3="/opt/homebrew/bin/python3"
 
 # --- Step 4: Install Python hid library ---
-PYTHON3="$(command -v /opt/homebrew/bin/python3 || command -v python3)"
 if "$PYTHON3" -c "import hid" 2>/dev/null; then
     ok "Python hid library installed"
 else
@@ -138,9 +138,11 @@ ALIAS_LINE="alias nanoleaf=\"$PYTHON3 $SCRIPT_DIR/nanoleaf.py\""
 SHELL_RC="$HOME/.zshrc"
 [[ "$SHELL" == */bash ]] && SHELL_RC="$HOME/.bashrc"
 
-if grep -q "alias nanoleaf=" "$SHELL_RC" 2>/dev/null; then
+if grep -qF "$ALIAS_LINE" "$SHELL_RC" 2>/dev/null; then
     ok "Shell alias already configured"
 else
+    # Remove old alias if exists, then add the correct one
+    sed -i '' '/alias nanoleaf=/d' "$SHELL_RC" 2>/dev/null || true
     echo "" >> "$SHELL_RC"
     echo "# Nanoleaf lightstrip controller" >> "$SHELL_RC"
     echo "$ALIAS_LINE" >> "$SHELL_RC"
