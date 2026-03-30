@@ -12,14 +12,14 @@
 #
 # 三种模式：
 #   默认模式  — 根据流派自动配色，音量驱动亮度，强节拍时旋转
-#   工作模式  — 固定暖白→淡蓝渐变，无动画，适合专注
+#   工作模式  — 固定暖白色（与 nanoleaf warm 一致），无动画，适合专注
 #   夜店模式  — 高饱和互补色，每帧旋转，音量大幅驱动明暗
 #
 # 依赖：nanoleaf.py, ffmpeg, sox, BlackHole 2ch（音频模式）
 #
 # Usage:
 #   ./music.sh              # 默认：音频响应模式
-#   ./music.sh --work       # 工作模式：暖白淡蓝渐变，静态
+#   ./music.sh --work       # 工作模式：暖白色，静态
 #   ./music.sh --club       # 夜店模式：高饱和，随音量快速变化
 #   ./music.sh --bpm        # BPM 模式：按节拍旋转（不需要音频捕获）
 #   ./music.sh --club --bpm # 夜店配色 + BPM 旋转
@@ -56,7 +56,7 @@ Usage: music.sh [OPTIONS]
 
 Options:
   (default)    Audio-reactive: colors pulse and shift with the music volume
-  --work       Warm white to light blue gradient, no animation
+  --work       Warm white (same as nanoleaf warm), no animation
   --club       High saturation, aggressive audio reaction
   --bpm        Use BPM-based rotation instead of audio (no audio setup needed)
 
@@ -108,14 +108,26 @@ fi
 # 生命周期管理
 # ============================================================
 
-# Ctrl+C 或终止信号时，恢复灯带为暖白光
+# 验证 nanoleaf.py 可用
+if [[ ! -f "$NANOLEAF" ]]; then
+    echo "[error] nanoleaf.py not found at $NANOLEAF"
+    exit 1
+fi
+if ! "$NANOLEAF" info >/dev/null 2>&1; then
+    echo "[error] Cannot communicate with lightstrip. Check USB connection."
+    exit 1
+fi
+
+# 退出时恢复灯带为暖白光（EXIT trap 覆盖所有退出方式）
+CLEANUP_DONE=0
 cleanup() {
+    [[ "$CLEANUP_DONE" == "1" ]] && return
+    CLEANUP_DONE=1
     echo ""
     echo "Exiting — setting warm white..."
     "$NANOLEAF" color 255 180 100 >/dev/null 2>&1 || true
-    exit 0
 }
-trap cleanup INT TERM
+trap cleanup EXIT
 
 # 调用 nanoleaf.py 的封装函数，失败时打印警告但不中断
 nl() {
@@ -182,6 +194,7 @@ rgb_colored_name() {
 show_palette() {
     local -a colors=($1)
     local total=${#colors[@]}
+    if (( total == 0 )); then return; fi
     local per_row=$(( (total + 2) / 3 ))
     # 非首次调用时，将光标上移 3 行覆盖上次输出
     if [[ "${PALETTE_SHOWN:-}" == "1" ]]; then
@@ -215,15 +228,13 @@ generate_palette() {
     local zones=()
     local half=$(( NUM_ZONES / 2 ))
     (( half < 1 )) && half=1
-    local last=$(( NUM_ZONES - 1 ))
     for (( i=0; i<NUM_ZONES; i++ )); do
         local ah as av bh bs bv t_num t_den
         if (( i < half )); then
-            t_num=$i; t_den=$half
+            t_num=$i; t_den=$(( half > 1 ? half - 1 : 1 ))
             ah=$h1; as=$s1; av=$v1; bh=$h2; bs=$s2; bv=$v2
         else
-            t_num=$(( i - half )); t_den=$(( NUM_ZONES - half ))
-            (( t_den < 1 )) && t_den=1
+            t_num=$(( i - half )); t_den=$(( NUM_ZONES - half > 1 ? NUM_ZONES - half - 1 : 1 ))
             ah=$h2; as=$s2; av=$v2; bh=$h3; bs=$s3; bv=$v3
         fi
         local ih=$(( ah + (bh - ah) * t_num / t_den ))
@@ -241,6 +252,7 @@ rotate_palette() {
     local -a colors=($1)
     local n=$2
     local len=${#colors[@]}
+    if (( len == 0 )); then echo ""; return; fi
     (( n = n % len ))
     local result=()
     for (( i=0; i<len; i++ )); do
@@ -254,6 +266,7 @@ rotate_palette() {
 # factor: 0=全黑, 100=原始亮度
 scale_palette() {
     local -a colors=($1)
+    if (( ${#colors[@]} == 0 )); then echo ""; return; fi
     local factor=$2  # 0-100
     local result=()
     for c in "${colors[@]}"; do
@@ -275,6 +288,7 @@ scale_palette() {
 generate_block_palette() {
     local -a src_colors=($@)
     local n_colors=${#src_colors[@]}
+    if (( n_colors == 0 )); then echo ""; return; fi
     local block_size=$(( NUM_ZONES / n_colors ))
     (( block_size < 1 )) && block_size=1
     local result=()
@@ -331,7 +345,7 @@ get_music_info() {
     local info
     info=$(osascript -e '
         tell application "Music"
-            if player state is not stopped then
+            if player state is playing then
                 set t to name of current track
                 set a to artist of current track
                 set g to ""
@@ -432,6 +446,18 @@ generate_random_palette() {
 PALETTE_CHANGE_COUNTER=0  # 纯音频模式下定时换色板的计数器
 
 while true; do
+    # --- 工作模式：直接设置暖白，跳过所有音频/曲目逻辑 ---
+    if [[ "$MODE" == "work" ]]; then
+        if [[ -z "$PALETTE" ]]; then
+            PALETTE=$(generate_palette 30 61 100 30 61 100 30 61 100)
+            nl zones $PALETTE
+            echo "[work] Warm white mode"
+            show_palette "$PALETTE"
+        fi
+        sleep 10
+        continue
+    fi
+
     # --- 获取当前曲目信息 ---
     # 音频模式下降低轮询频率（每 ~30 帧 ≈ 2.5 秒），减少 osascript 延迟
     if [[ "$SYNC" == "audio" && "$MODE" != "work" && -n "$LAST_TRACK" && "$LAST_TRACK" != "__idle__" ]]; then
@@ -496,8 +522,9 @@ while true; do
     fi
 
     # --- 曲目切换时：重新生成色板（Apple Music 模式）---
-    if [[ "$TRACK" != "$LAST_TRACK" && "$LAST_TRACK" != "__audio_only__" ]]; then
-        LAST_TRACK="$TRACK"
+    TRACK_ID="${TRACK}|${ARTIST}"
+    if [[ -n "$TRACK" && "$BPM" != "stopped" && "$TRACK_ID" != "$LAST_TRACK" ]]; then
+        LAST_TRACK="$TRACK_ID"
         ROTATION=0
         AVG_LEVEL=0
         FRAMES_SINCE_BEAT=0
